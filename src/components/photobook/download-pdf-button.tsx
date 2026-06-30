@@ -1,0 +1,405 @@
+"use client";
+
+import { useState } from "react";
+import { Download, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+const CAPTURE_ERROR_MESSAGE =
+  "Could not capture photobook pages. Please refresh and try again.";
+const IMAGE_WAIT_TIMEOUT_MS = 5000;
+const PDF_PAGE_WIDTH = 1200;
+const PDF_PAGE_HEIGHT = 1500;
+
+type ExportPage = {
+  element: HTMLElement;
+  label: string;
+  id: string;
+  order: number;
+};
+
+function slugify(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "photobook"
+  );
+}
+
+const safeThemeVariables = {
+  "--background": "#050505",
+  "--foreground": "#ffffff",
+  "--card": "#050505",
+  "--card-foreground": "#ffffff",
+  "--muted": "#171717",
+  "--muted-foreground": "#a3a3a3",
+  "--accent": "#1f1f1f",
+  "--accent-foreground": "#ffffff",
+  "--border": "rgba(255, 255, 255, 0.16)",
+  "--input": "rgba(255, 255, 255, 0.16)",
+  "--ring": "rgba(255, 255, 255, 0.32)",
+};
+
+function hasUnsupportedColorFunction(value: string) {
+  return /\b(?:oklch|oklab|lab|lch|color|color-mix)\(/i.test(value);
+}
+
+function applyExportSafeVariables(element: HTMLElement) {
+  for (const [name, value] of Object.entries(safeThemeVariables)) {
+    element.style.setProperty(name, value);
+  }
+}
+
+function nextAnimationFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function logPdfExport(message: string, details?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== "production") {
+    console.info(`[photobook-pdf] ${message}`, details ?? {});
+  }
+}
+
+async function waitForFonts() {
+  if ("fonts" in document) {
+    await document.fonts.ready;
+  }
+}
+
+function waitForImage(image: HTMLImageElement) {
+  if (image.complete && image.naturalWidth > 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, IMAGE_WAIT_TIMEOUT_MS);
+
+    function settle() {
+      window.clearTimeout(timeout);
+      resolve();
+    }
+
+    image.addEventListener("load", settle, { once: true });
+    image.addEventListener("error", settle, { once: true });
+  });
+}
+
+async function waitForImages(rootElement: HTMLElement) {
+  const images = Array.from(rootElement.querySelectorAll<HTMLImageElement>("img"));
+
+  for (const image of images) {
+    image.crossOrigin = "anonymous";
+
+    if (image.loading === "lazy") {
+      image.loading = "eager";
+    }
+  }
+
+  await Promise.all(images.map(waitForImage));
+}
+
+function sanitizePhotobookClone(documentClone: Document) {
+  const view = documentClone.defaultView;
+
+  if (!view) {
+    return;
+  }
+
+  applyExportSafeVariables(documentClone.documentElement);
+  documentClone.body.style.backgroundColor = "#ffffff";
+  documentClone.body.style.color = "#050505";
+
+  const pages = Array.from(
+    documentClone.querySelectorAll<HTMLElement>("[data-photobook-page='true']"),
+  );
+  const isDarkTheme = documentClone.documentElement.classList.contains("dark");
+
+  for (const page of pages) {
+    const isCreditPage = page.dataset.photobookPageKind === "credit";
+    const pageBackground = isCreditPage
+      ? isDarkTheme
+        ? "#050505"
+        : "#ffffff"
+      : "#050505";
+    const pageColor = isCreditPage ? (isDarkTheme ? "#f7efe0" : "#050505") : "#ffffff";
+    const pageBorderColor = isCreditPage
+      ? isDarkTheme
+        ? "rgba(255, 255, 255, 0.14)"
+        : "rgba(0, 0, 0, 0.10)"
+      : "rgba(255, 255, 255, 0.16)";
+
+    page.classList.add("photobook-export-safe");
+    applyExportSafeVariables(page);
+    page.style.width = `${PDF_PAGE_WIDTH}px`;
+    page.style.height = `${PDF_PAGE_HEIGHT}px`;
+    page.style.minWidth = `${PDF_PAGE_WIDTH}px`;
+    page.style.minHeight = `${PDF_PAGE_HEIGHT}px`;
+    page.style.maxWidth = `${PDF_PAGE_WIDTH}px`;
+    page.style.aspectRatio = "4 / 5";
+    page.style.backgroundColor = pageBackground;
+    page.style.color = pageColor;
+    page.style.borderColor = pageBorderColor;
+    page.style.boxShadow = "0 28px 90px rgba(0, 0, 0, 0.22)";
+    page.style.opacity = "1";
+    page.style.transform = "none";
+    page.style.filter = "none";
+    page.style.mixBlendMode = "normal";
+
+    const elements = [page, ...Array.from(page.querySelectorAll<HTMLElement>("*"))];
+
+    for (const element of elements) {
+      const styles = view.getComputedStyle(element);
+
+      element.style.opacity = "1";
+      element.style.transform = "none";
+      element.style.filter = "none";
+      element.style.backdropFilter = "none";
+      element.style.mixBlendMode = "normal";
+
+      if (hasUnsupportedColorFunction(styles.color)) {
+        element.style.color = element === page ? pageColor : "inherit";
+      }
+
+      if (hasUnsupportedColorFunction(styles.backgroundColor)) {
+        element.style.backgroundColor =
+          element === page ? pageBackground : "transparent";
+      }
+
+      if (hasUnsupportedColorFunction(styles.borderTopColor)) {
+        element.style.borderTopColor = pageBorderColor;
+      }
+
+      if (hasUnsupportedColorFunction(styles.borderRightColor)) {
+        element.style.borderRightColor = pageBorderColor;
+      }
+
+      if (hasUnsupportedColorFunction(styles.borderBottomColor)) {
+        element.style.borderBottomColor = pageBorderColor;
+      }
+
+      if (hasUnsupportedColorFunction(styles.borderLeftColor)) {
+        element.style.borderLeftColor = pageBorderColor;
+      }
+
+      if (hasUnsupportedColorFunction(styles.outlineColor)) {
+        element.style.outlineColor = "rgba(255, 255, 255, 0.32)";
+      }
+
+      if (hasUnsupportedColorFunction(styles.textDecorationColor)) {
+        element.style.textDecorationColor = "rgba(255, 255, 255, 0.72)";
+      }
+
+      if (hasUnsupportedColorFunction(styles.boxShadow)) {
+        element.style.boxShadow = "none";
+      }
+    }
+  }
+}
+
+async function capturePhotobookPage(
+  page: ExportPage,
+  html2canvas: typeof import("html2canvas").default,
+) {
+  const pageElement = page.element;
+  const rect = pageElement.getBoundingClientRect();
+
+  logPdfExport("page dimensions before capture", {
+    label: page.label,
+    width: rect.width,
+    height: rect.height,
+  });
+
+  if (rect.width === 0 || rect.height === 0) {
+    throw new Error(`Could not capture ${page.label}.`);
+  }
+
+  await waitForImages(pageElement);
+  await nextAnimationFrame();
+
+  const canvas = await html2canvas(pageElement, {
+    backgroundColor: "#050505",
+    scale: 2,
+    width: rect.width,
+    height: rect.height,
+    useCORS: true,
+    allowTaint: false,
+    logging: true,
+    onclone: sanitizePhotobookClone,
+  });
+
+  logPdfExport("canvas dimensions after capture", {
+    label: page.label,
+    width: canvas.width,
+    height: canvas.height,
+  });
+
+  if (canvas.width === 0 || canvas.height === 0) {
+    throw new Error(`Could not capture ${page.label}.`);
+  }
+
+  return canvas;
+}
+
+function getExportPages() {
+  const pages = Array.from(
+    document.querySelectorAll<HTMLElement>("[data-photobook-page='true']"),
+  )
+    .map((element, index) => {
+      const rect = element.getBoundingClientRect();
+      const fallbackLabel =
+        index === 0
+          ? "cover page"
+          : index === 1
+            ? "people page"
+            : `photo page ${index - 1}`;
+
+      return {
+        element,
+        id: element.dataset.photobookPageId ?? `page-${index}`,
+        label: element.dataset.photobookPageLabel ?? fallbackLabel,
+        order: Number(element.dataset.photobookPageOrder ?? index + 1),
+        isExportCopy: element.dataset.photobookExportCopy === "true",
+        width: rect.width,
+        height: rect.height,
+      };
+    })
+    .filter((page) => page.width > 0 && page.height > 0)
+    .sort((first, second) => {
+      if (first.order !== second.order) {
+        return first.order - second.order;
+      }
+
+      if (first.isExportCopy !== second.isExportCopy) {
+        return first.isExportCopy ? -1 : 1;
+      }
+
+      return 0;
+    });
+  const dedupedPages = new Map<string, (typeof pages)[number]>();
+
+  for (const page of pages) {
+    if (!dedupedPages.has(page.id)) {
+      dedupedPages.set(page.id, page);
+    }
+  }
+
+  const exportPages = Array.from(dedupedPages.values()).map(
+    ({ element, id, label, order }) => ({
+      element,
+      id,
+      label,
+      order,
+    }),
+  );
+  const customPages = exportPages.filter(
+    (page) => page.element.dataset.photobookPageKind === "custom",
+  );
+  const firstCustomPage = customPages[0]?.element;
+
+  logPdfExport("custom pages found", {
+    count: customPages.length,
+    firstCustomPagePhotoBlocks: firstCustomPage?.dataset.photobookPhotoBlocks ?? "[]",
+  });
+
+  return exportPages;
+}
+
+export function DownloadPdfButton({
+  roomName,
+  disabled = false,
+  onBeforeDownload,
+}: {
+  roomName: string;
+  disabled?: boolean;
+  onBeforeDownload?: () => Promise<void> | void;
+}) {
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload() {
+    setStatus("loading");
+    setError(null);
+
+    try {
+      await onBeforeDownload?.();
+      await nextAnimationFrame();
+
+      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+      ]);
+
+      await nextAnimationFrame();
+
+      const pageElements = getExportPages();
+
+      logPdfExport("pages found", { count: pageElements.length });
+
+      if (pageElements.length === 0) {
+        throw new Error(CAPTURE_ERROR_MESSAGE);
+      }
+
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "px",
+        format: [PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT],
+        compress: true,
+      });
+
+      document.body.classList.add("is-exporting-pdf");
+
+      try {
+        await waitForFonts();
+        await nextAnimationFrame();
+
+        for (const [index, pageElement] of pageElements.entries()) {
+          const canvas = await capturePhotobookPage(pageElement, html2canvas);
+          const image = canvas.toDataURL("image/jpeg", 0.92);
+
+          if (index > 0) {
+            pdf.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT], "portrait");
+          }
+
+          pdf.addImage(image, "JPEG", 0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+        }
+      } finally {
+        document.body.classList.remove("is-exporting-pdf");
+      }
+
+      pdf.save(`clay-${slugify(roomName)}-photobook.pdf`);
+      setStatus("idle");
+    } catch (downloadError) {
+      setStatus("error");
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "PDF generation failed.",
+      );
+    }
+  }
+
+  return (
+    <div className="grid gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        className="h-10 rounded-full"
+        onClick={handleDownload}
+        disabled={disabled || status === "loading"}
+      >
+        {status === "loading" ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <Download className="size-4" />
+        )}
+        {status === "loading" ? "Preparing PDF..." : "Download PDF"}
+      </Button>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+    </div>
+  );
+}
