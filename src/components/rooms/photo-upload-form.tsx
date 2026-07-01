@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import { uploadPhotosAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -169,6 +170,7 @@ export function PhotoUploadForm({
   missingConfigKey?: string;
   uploadCount?: string;
 }) {
+  const router = useRouter();
   const [items, setItems] = useState<UploadItem[]>([]);
   const [clientError, setClientError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -180,6 +182,45 @@ export function PhotoUploadForm({
       current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
     );
   }
+
+  useEffect(() => {
+    if (isPending || (uploadStatus !== "success" && uploadStatus !== "error")) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (uploadStatus === "success") {
+        setItems((current) => {
+          current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+          return [];
+        });
+        setClientError(null);
+
+        if (inputRef.current) {
+          inputRef.current.value = "";
+        }
+
+        router.refresh();
+        return;
+      }
+
+      const detail = getUploadMessage(uploadMessage, missingConfigKey);
+
+      setItems((current) =>
+        current.map((item) =>
+          item.status === "uploading"
+            ? {
+                ...item,
+                status: "error",
+                detail,
+              }
+            : item,
+        ),
+      );
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isPending, missingConfigKey, router, uploadMessage, uploadStatus]);
 
   function handleFiles(files: FileList | null) {
     setClientError(null);

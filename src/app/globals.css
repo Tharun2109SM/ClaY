@@ -196,7 +196,6 @@
     filter: none !important;
     mix-blend-mode: normal !important;
     opacity: 1 !important;
-    transform: none !important;
   }
 
   body.is-exporting-pdf [data-photobook-page="true"] .backdrop-blur-sm,
@@ -281,9 +280,9 @@
   pointer-events: none;
   background: linear-gradient(
     to bottom,
-    rgb(0 0 0 / 0),
-    rgb(0 0 0 / 0.58) 68%,
-    #000000 100%
+    rgb(255 253 248 / 0),
+    rgb(255 253 248 / 0.66) 68%,
+    #fffdf8 100%
   );
 }
 

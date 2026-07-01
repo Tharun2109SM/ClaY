@@ -138,6 +138,7 @@ export default async function RoomDetailPage({
             error={galleryError}
             isHost={isHost}
             coverPhotoId={room.cover_photo_id}
+            currentUserId={user.id}
           />
         </section>
 

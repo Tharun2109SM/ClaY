@@ -135,7 +135,7 @@ export default async function PhotobookPage({
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                 Page 2
               </p>
-              <PeoplePage members={memberResult.members} />
+              <PeoplePage members={memberResult.members} photobookId={photobook.id} />
             </section>
 
             <CustomPhotobookEditor photos={photoResult.photos} roomName={room.name} />

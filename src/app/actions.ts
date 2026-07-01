@@ -63,6 +63,23 @@ function logSupabaseIssue(label: string, error: {
   });
 }
 
+function logPhotobookCoverSaveIssue(stage: string, error: {
+  message?: string;
+  details?: string | null;
+  hint?: string | null;
+  code?: string | null;
+}) {
+  const issue = toSupabaseIssue(error);
+
+  console.error("[photobook-cover-save]", {
+    stage,
+    message: issue.message,
+    details: issue.details,
+    hint: issue.hint,
+    code: issue.code,
+  });
+}
+
 function logCreateRoomStep(
   step: string,
   details: Record<string, string | number | boolean | null>,
@@ -1000,6 +1017,130 @@ export async function setRoomCoverAction(formData: FormData) {
   redirect(`/rooms/${roomId}?gallery=success&message=cover-updated`);
 }
 
+export async function deletePhotoAction(formData: FormData): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      message: string;
+      code: string;
+    }
+> {
+  const supabase = await createSupabaseServerClient();
+  const roomId = getString(formData, "room_id");
+  const photoId = getString(formData, "photo_id");
+
+  if (!roomId || !photoId) {
+    return {
+      ok: false,
+      message: "Photo details are missing.",
+      code: "missing_photo",
+    };
+  }
+
+  if (!supabase) {
+    return {
+      ok: false,
+      message: "Supabase is not configured.",
+      code: "missing_config",
+    };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return {
+      ok: false,
+      message: "You must be signed in to delete photos.",
+      code: "not_authenticated",
+    };
+  }
+
+  const { data: photo, error: photoError } = await supabase
+    .from("photos")
+    .select("id, room_id, uploader_id, storage_key, thumbnail_storage_key")
+    .eq("id", photoId)
+    .eq("room_id", roomId)
+    .single();
+
+  if (photoError || !photo) {
+    if (photoError) {
+      logSupabaseIssue("Unable to load photo before delete", photoError);
+    }
+
+    return {
+      ok: false,
+      message: "We could not find that photo.",
+      code: photoError?.code ?? "photo_not_found",
+    };
+  }
+
+  const { data: isOwner, error: ownerError } = await supabase.rpc(
+    "is_room_owner",
+    { target_room_id: roomId },
+  );
+
+  if (ownerError) {
+    logSupabaseIssue("Unable to check room owner before photo delete", ownerError);
+  }
+
+  if (photo.uploader_id !== user.id && !isOwner) {
+    return {
+      ok: false,
+      message: "Only the uploader or room host can delete this photo.",
+      code: "delete_photo_not_allowed",
+    };
+  }
+
+  const storageKeys = [photo.storage_key, photo.thumbnail_storage_key];
+
+  try {
+    await deleteR2Objects(storageKeys);
+  } catch (error) {
+    const message =
+      error instanceof R2ConfigurationError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "Cloudflare R2 could not delete this photo.";
+
+    console.warn("Unable to delete photo files from R2", {
+      message,
+      keyCount: storageKeys.filter(Boolean).length,
+    });
+
+    return {
+      ok: false,
+      message,
+      code: "r2_delete_failed",
+    };
+  }
+
+  const { data: deleted, error: deleteError } = await supabase.rpc(
+    "delete_photo_for_current_user",
+    { target_photo_id: photoId },
+  );
+
+  if (deleteError || !deleted) {
+    if (deleteError) {
+      logSupabaseIssue("Unable to delete photo database rows via RPC", deleteError);
+    }
+
+    return {
+      ok: false,
+      message: deleteError?.message ?? "The photo delete RPC returned no result.",
+      code: deleteError?.code ?? "photo_delete_rpc_failed",
+    };
+  }
+
+  revalidatePath(`/rooms/${roomId}`);
+  revalidatePath(`/rooms/${roomId}/photobook`);
+  revalidatePath("/dashboard");
+
+  return { ok: true };
+}
+
 export async function updatePhotobookCoverAction(formData: FormData) {
   const supabase = await createSupabaseServerClient();
   const roomId = getString(formData, "room_id");
@@ -1028,9 +1169,14 @@ export async function updatePhotobookCoverAction(formData: FormData) {
     redirect("/auth/sign-in");
   }
 
-  const { data: isOwner } = await supabase.rpc("is_room_owner", {
+  const { data: isOwner, error: ownerError } = await supabase.rpc("is_room_owner", {
     target_room_id: roomId,
   });
+
+  if (ownerError) {
+    logPhotobookCoverSaveIssue("owner-check", ownerError);
+    redirect(`/rooms/${roomId}/photobook?message=cover-update-failed`);
+  }
 
   if (!isOwner) {
     redirect(`/rooms/${roomId}/photobook?message=cover-host-only`);
@@ -1047,36 +1193,62 @@ export async function updatePhotobookCoverAction(formData: FormData) {
   }
 
   if (coverPhotoId) {
-    const { data: photo } = await supabase
+    const { data: photo, error: photoError } = await supabase
       .from("photos")
       .select("id")
       .eq("id", coverPhotoId)
       .eq("room_id", roomId)
-      .single();
+      .maybeSingle();
+
+    if (photoError) {
+      logPhotobookCoverSaveIssue("cover-photo-lookup", photoError);
+      redirect(`/rooms/${roomId}/photobook?message=cover-update-failed`);
+    }
 
     if (!photo) {
       redirect(`/rooms/${roomId}/photobook?message=cover-photo-not-found`);
     }
   }
 
-  const { error } = await supabase
-    .from("photobook_drafts")
-    .update({
-      cover_photo_id: coverPhotoId,
-      cover_title: coverTitle || "ClaY. by tharun",
-      cover_subtitle: coverSubtitle || null,
-      cover_font: coverFont,
-      cover_text_color: coverTextColor,
-      cover_text_position: coverTextPosition,
-      cover_overlay_style: coverOverlayStyle,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", photobookId)
-    .eq("room_id", roomId);
+  const coverPayload = {
+    cover_photo_id: coverPhotoId,
+    cover_title: coverTitle || "ClaY. by tharun",
+    cover_subtitle: coverSubtitle || null,
+    cover_font: coverFont,
+    cover_text_color: coverTextColor,
+    cover_text_position: coverTextPosition,
+    cover_overlay_style: coverOverlayStyle,
+    updated_at: new Date().toISOString(),
+  };
 
-  if (error) {
-    console.error("Unable to update photobook cover", error);
+  const { data: updatedDraft, error: updateError } = await supabase
+    .from("photobook_drafts")
+    .update(coverPayload)
+    .eq("room_id", roomId)
+    .select("id")
+    .maybeSingle();
+
+  if (updateError) {
+    logPhotobookCoverSaveIssue("draft-update", updateError);
     redirect(`/rooms/${roomId}/photobook?message=cover-update-failed`);
+  }
+
+  if (!updatedDraft) {
+    const { error: insertError } = await supabase
+      .from("photobook_drafts")
+      .insert({
+        room_id: roomId,
+        created_by: user.id,
+        title: coverTitle || "ClaY photobook",
+        ...coverPayload,
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      logPhotobookCoverSaveIssue("draft-create", insertError);
+      redirect(`/rooms/${roomId}/photobook?message=cover-update-failed`);
+    }
   }
 
   revalidatePath(`/rooms/${roomId}/photobook`);

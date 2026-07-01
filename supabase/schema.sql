@@ -114,6 +114,14 @@ create table public.photobook_draft_photos (
   unique (draft_id, position)
 );
 
+alter table public.photobook_drafts
+  drop constraint if exists photobook_drafts_cover_text_color_check,
+  add constraint photobook_drafts_cover_text_color_check
+  check (
+    cover_text_color in ('ivory', 'ink', 'clay', 'sage', 'rose')
+    or cover_text_color ~ '^#[0-9A-Fa-f]{6}$'
+  );
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -631,6 +639,73 @@ begin
 end;
 $$;
 
+create or replace function public.delete_photo_for_current_user(target_photo_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_room_id uuid;
+  target_uploader_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'delete_photo_for_current_user requires an authenticated user'
+      using errcode = '28000';
+  end if;
+
+  select photos.room_id, photos.uploader_id
+    into target_room_id, target_uploader_id
+  from public.photos
+  join public.rooms on rooms.id = photos.room_id
+  where photos.id = target_photo_id
+    and rooms.deleted_at is null;
+
+  if target_room_id is null then
+    raise exception 'Photo not found'
+      using errcode = 'P0002';
+  end if;
+
+  if target_uploader_id <> auth.uid()
+    and not exists (
+      select 1
+      from public.rooms
+      where rooms.id = target_room_id
+        and rooms.created_by = auth.uid()
+        and rooms.deleted_at is null
+    )
+  then
+    raise exception 'Only the uploader or room host can delete this photo.'
+      using errcode = '42501';
+  end if;
+
+  update public.rooms
+    set cover_photo_id = null
+  where cover_photo_id = target_photo_id;
+
+  update public.photobook_drafts
+    set cover_photo_id = null,
+        updated_at = now()
+  where cover_photo_id = target_photo_id;
+
+  update public.photobook_pages
+    set photo_ids = array_remove(photo_ids, target_photo_id),
+        updated_at = now()
+  where target_photo_id = any(photo_ids);
+
+  delete from public.photo_favorites
+  where photo_id = target_photo_id;
+
+  delete from public.photobook_draft_photos
+  where photo_id = target_photo_id;
+
+  delete from public.photos
+  where id = target_photo_id;
+
+  return true;
+end;
+$$;
+
 create or replace function public.delete_room_for_current_user(target_room_id uuid)
 returns boolean
 language plpgsql
@@ -693,4 +768,5 @@ $$;
 grant usage on schema public to anon, authenticated;
 grant execute on function public.get_invite_preview(text) to anon, authenticated;
 grant execute on function public.join_room_by_invite(text) to authenticated;
+grant execute on function public.delete_photo_for_current_user(uuid) to authenticated;
 grant execute on function public.delete_room_for_current_user(uuid) to authenticated;

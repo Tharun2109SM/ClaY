@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   AlertCircle,
   ChevronLeft,
@@ -9,9 +10,11 @@ import {
   Heart,
   ImageIcon,
   Star,
+  Trash2,
   X,
 } from "lucide-react";
 import {
+  deletePhotoAction,
   setRoomCoverAction,
   togglePhotoFavoriteAction,
 } from "@/app/actions";
@@ -111,6 +114,7 @@ export function PhotoGallery({
   error,
   isHost,
   coverPhotoId,
+  currentUserId,
 }: {
   roomId: string;
   members: RoomMember[];
@@ -118,9 +122,14 @@ export function PhotoGallery({
   error: string | null;
   isHost: boolean;
   coverPhotoId: string | null;
+  currentUserId: string;
 }) {
+  const router = useRouter();
   const [selection, setSelection] = useState<GallerySelection>({ type: "people" });
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PhotoAsset | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeletePending, startDeleteTransition] = useTransition();
 
   const memberSummaries = useMemo(
     () =>
@@ -173,6 +182,39 @@ export function PhotoGallery({
     ? filteredPhotos.findIndex((photo) => photo.id === activePhotoId)
     : -1;
   const activePhoto = activeIndex >= 0 ? filteredPhotos[activeIndex] : null;
+
+  function canDeletePhoto(photo: PhotoAsset) {
+    return isHost || photo.uploader_id === currentUserId;
+  }
+
+  function handleDeletePhoto() {
+    const target = deleteTarget;
+
+    if (!target) {
+      return;
+    }
+
+    const formData = new FormData();
+    formData.set("room_id", roomId);
+    formData.set("photo_id", target.id);
+    setDeleteError(null);
+
+    startDeleteTransition(async () => {
+      const result = await deletePhotoAction(formData);
+
+      if (result.ok) {
+        if (activePhotoId === target.id) {
+          setActivePhotoId(null);
+        }
+
+        setDeleteTarget(null);
+        router.refresh();
+        return;
+      }
+
+      setDeleteError(`${result.code}: ${result.message}`);
+    });
+  }
 
   useEffect(() => {
     if (!activePhoto) {
@@ -355,19 +397,37 @@ export function PhotoGallery({
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {filteredPhotos.map((photo) => (
             <Card key={photo.id} className="overflow-hidden py-0">
-              <button
-                type="button"
-                className="relative aspect-[4/5] w-full bg-muted text-left"
-                onClick={() => setActivePhotoId(photo.id)}
-              >
-                <PhotoImage photo={photo} variant="thumbnail" />
+              <div className="group relative aspect-[4/5] w-full bg-muted">
+                <button
+                  type="button"
+                  className="absolute inset-0 w-full text-left"
+                  onClick={() => setActivePhotoId(photo.id)}
+                >
+                  <PhotoImage photo={photo} variant="thumbnail" />
+                  <span className="sr-only">Open photo</span>
+                </button>
                 {coverPhotoId === photo.id ? (
                   <Badge className="absolute left-3 top-3 gap-1">
                     <Star className="size-3" />
                     Cover
                   </Badge>
                 ) : null}
-              </button>
+                {canDeletePhoto(photo) ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="secondary"
+                    aria-label="Delete photo"
+                    className="absolute right-3 top-3 z-10 size-9 rounded-full border border-black/10 bg-white/85 text-muted-foreground shadow-sm backdrop-blur transition duration-200 hover:border-destructive/30 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 dark:border-white/10 dark:bg-black/60 dark:hover:border-destructive/40 dark:hover:bg-destructive dark:hover:text-destructive-foreground"
+                    onClick={() => {
+                      setDeleteTarget(photo);
+                      setDeleteError(null);
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                ) : null}
+              </div>
               <CardContent className="grid gap-3 p-4">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">
@@ -427,6 +487,60 @@ export function PhotoGallery({
       )}
         </>
       )}
+
+      {deleteTarget ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-photo-title"
+        >
+          <div className="w-full max-w-md rounded-3xl border bg-card p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="grid size-10 shrink-0 place-items-center rounded-full border bg-muted text-destructive">
+                <Trash2 className="size-4" />
+              </div>
+              <div>
+                <h2 id="delete-photo-title" className="text-lg font-semibold">
+                  Delete this photo?
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  This removes the photo from ClaY and storage. This cannot be
+                  undone.
+                </p>
+              </div>
+            </div>
+
+            {deleteError ? (
+              <div className="mt-4 rounded-2xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {deleteError}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isDeletePending}
+                onClick={() => {
+                  setDeleteTarget(null);
+                  setDeleteError(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isDeletePending}
+                onClick={handleDeletePhoto}
+              >
+                {isDeletePending ? "Deleting…" : "Delete photo"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {activePhoto ? (
         <div

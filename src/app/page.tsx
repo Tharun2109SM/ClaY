@@ -63,7 +63,7 @@ function MemoryRoomPreview() {
       aria-hidden="true"
       className="relative mx-auto mt-8 min-h-[340px] w-full max-w-[28rem] sm:min-h-[430px] lg:mt-0 lg:min-h-[540px] lg:max-w-[34rem]"
     >
-      <div className="absolute inset-x-6 bottom-10 top-9 rounded-[2rem] border border-white/10 bg-white/[0.012] shadow-[0_28px_90px_rgb(0_0_0_/_0.55)] sm:inset-x-8 lg:inset-x-10" />
+      <div className="absolute inset-x-6 bottom-10 top-9 rounded-[2rem] border border-black/10 bg-black/[0.012] shadow-[0_28px_90px_rgb(0_0_0_/_0.12)] sm:inset-x-8 lg:inset-x-10 dark:border-white/10 dark:bg-white/[0.012] dark:shadow-[0_28px_90px_rgb(0_0_0_/_0.55)]" />
       <div className="absolute inset-0 grid place-items-center">
         <Image
           src="/assets/vintage-polaroid-camera.png"
@@ -72,7 +72,7 @@ function MemoryRoomPreview() {
           height={760}
           priority
           sizes="(min-width: 1024px) 520px, 82vw"
-          className="h-auto w-[90%] max-w-[30rem] drop-shadow-[0_42px_82px_rgb(0_0_0_/_0.66)]"
+          className="h-auto w-[90%] max-w-[30rem] drop-shadow-[0_36px_72px_rgb(0_0_0_/_0.18)] dark:drop-shadow-[0_42px_82px_rgb(0_0_0_/_0.66)]"
         />
       </div>
     </div>
@@ -95,7 +95,7 @@ export default async function Home() {
         pre production v1
       </p>
       <IntroSplash />
-      <section className="relative min-h-screen overflow-hidden bg-[#000000] text-[#f7efe0] [--background:#000000] [--border:rgba(255,255,255,0.14)] [--foreground:#f7efe0] [--muted-foreground:#8f8f8f]">
+      <section className="relative min-h-screen overflow-hidden bg-[#fffdf8] text-[#050505] [--background:#fffdf8] [--border:rgba(0,0,0,0.12)] [--foreground:#050505] [--muted-foreground:#68645e] dark:bg-[#000000] dark:text-[#f7efe0] dark:[--background:#000000] dark:[--border:rgba(255,255,255,0.14)] dark:[--foreground:#f7efe0] dark:[--muted-foreground:#8f8f8f]">
         <header className="relative z-10 mx-auto flex w-full max-w-6xl flex-col items-start gap-5 px-6 py-6 sm:h-28 sm:flex-row sm:items-center sm:justify-between sm:py-0">
           <Logo size="large" />
           <nav className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -138,13 +138,13 @@ export default async function Home() {
         <div className="relative z-10 mx-auto grid min-h-[calc(100vh-7rem)] w-full max-w-6xl px-6 pb-12 pt-4 lg:pb-16">
           <div className="grid items-center gap-10 py-8 lg:grid-cols-[0.96fr_0.82fr] lg:gap-14 lg:py-4">
             <div className="max-w-4xl">
-              <p className="text-xs uppercase tracking-[0.32em] text-[#f7efe0]/42 sm:text-sm">
+              <p className="text-xs uppercase tracking-[0.32em] text-[#050505]/42 sm:text-sm dark:text-[#f7efe0]/42">
                 Private photo room
               </p>
-              <h2 className="mt-7 max-w-[760px] text-[clamp(2.75rem,14vw,4.5rem)] leading-none tracking-normal text-[#f7efe0] md:text-[clamp(4rem,7vw,7rem)] md:leading-[0.98]">
+              <h2 className="mt-7 max-w-[760px] text-[clamp(2.75rem,14vw,4.5rem)] leading-none tracking-normal text-[#050505] md:text-[clamp(4rem,7vw,7rem)] md:leading-[0.98] dark:text-[#f7efe0]">
                 Before the photos scatter.
               </h2>
-              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#f7efe0]/58 sm:text-xl sm:leading-9">
+              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#5f5b55] sm:text-xl sm:leading-9 dark:text-[#f7efe0]/58">
                 Create one private room, invite your people, and keep every view
                 of the occasion in one place.
               </p>
@@ -165,7 +165,7 @@ export default async function Home() {
                   How it works
                 </Link>
               </div>
-              <p className="mt-5 text-sm text-[#f7efe0]/40">
+              <p className="mt-5 text-sm text-[#6c6760] dark:text-[#f7efe0]/40">
                 Built for trips, weddings, birthdays, reunions.
               </p>
             </div>
@@ -173,14 +173,14 @@ export default async function Home() {
             <MemoryRoomPreview />
           </div>
 
-          <div className="border-y border-white/10 py-5 text-[#f7efe0]">
+          <div className="border-y border-black/10 py-5 text-[#050505] dark:border-white/10 dark:text-[#f7efe0]">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {heroProcessSteps.map((step) => (
                 <div key={step.number} className="flex items-center gap-4">
-                  <span className="text-xs text-[#f7efe0]/32">
+                  <span className="text-xs text-[#050505]/35 dark:text-[#f7efe0]/32">
                     {step.number}
                   </span>
-                  <span className="text-sm text-[#f7efe0]/62">
+                  <span className="text-sm text-[#050505]/65 dark:text-[#f7efe0]/62">
                     {step.title}
                   </span>
                 </div>
