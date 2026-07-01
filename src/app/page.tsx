@@ -3,8 +3,8 @@ import Image from "next/image";
 import { ArrowRight } from "lucide-react";
 import { signOutAction } from "@/app/actions";
 import { Logo } from "@/components/brand/logo";
-import { AuroraBackground } from "@/components/landing/aurora-background";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { IntroSplash } from "@/components/landing/intro-splash";
+import { ScrollProgressRail } from "@/components/landing/scroll-progress-rail";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/supabase/queries";
 
@@ -23,6 +23,25 @@ const steps = [
   },
 ];
 
+const heroProcessSteps = [
+  {
+    number: "01",
+    title: "Create a room",
+  },
+  {
+    number: "02",
+    title: "Invite people",
+  },
+  {
+    number: "03",
+    title: "Collect their view",
+  },
+  {
+    number: "04",
+    title: "Build the book",
+  },
+];
+
 const landingPrimaryButton =
   "group inline-flex h-10 items-center justify-center gap-2 rounded-full border border-black/10 bg-foreground px-4 text-[0.8rem] text-background shadow-[inset_0_1px_0_rgb(255_255_255_/_0.22),0_10px_30px_rgb(0_0_0_/_0.12)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.28),0_16px_42px_rgb(0_0_0_/_0.16)] active:translate-y-0 active:scale-[0.985] sm:h-11 sm:px-5 sm:text-sm dark:border-white/25 dark:bg-[#f7efe0] dark:text-black dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.85),0_0_28px_rgb(255_196_87_/_0.12),0_14px_42px_rgb(0_0_0_/_0.45)] dark:hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.9),0_0_38px_rgb(255_196_87_/_0.18),0_18px_52px_rgb(0_0_0_/_0.5)]";
 
@@ -32,6 +51,9 @@ const landingHeroButtonFrame =
 const landingHeroPrimaryButton =
   `${landingHeroButtonFrame} group inline-flex items-center justify-center gap-3 rounded-full border border-black/10 bg-foreground py-1.5 pl-7 pr-2 text-background shadow-[inset_0_1px_0_rgb(255_255_255_/_0.24),0_14px_38px_rgb(0_0_0_/_0.14)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.3),0_20px_54px_rgb(0_0_0_/_0.18)] active:translate-y-0 active:scale-[0.985] dark:border-white/25 dark:bg-[#f7efe0] dark:text-black dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.85),0_0_34px_rgb(255_196_87_/_0.14),0_16px_50px_rgb(0_0_0_/_0.5)] dark:hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.9),0_0_48px_rgb(255_196_87_/_0.2),0_22px_64px_rgb(0_0_0_/_0.55)]`;
 
+const secondHeroPrimaryButton =
+  `${landingHeroButtonFrame} group inline-flex items-center justify-center gap-3 rounded-full border border-black/10 bg-foreground py-1.5 pl-7 pr-2 text-background shadow-[inset_0_1px_0_rgb(255_255_255_/_0.24),0_14px_38px_rgb(0_0_0_/_0.14)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.3),0_20px_54px_rgb(0_0_0_/_0.18)] active:translate-y-0 active:scale-[0.985] dark:border-white/25 dark:bg-[#f7efe0] dark:text-black dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.85),0_16px_50px_rgb(0_0_0_/_0.5)] dark:hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.9),0_22px_64px_rgb(0_0_0_/_0.55)]`;
+
 const landingSecondaryButton =
   "inline-flex h-10 items-center justify-center rounded-full border border-foreground/15 bg-foreground/[0.035] px-4 text-[0.8rem] text-foreground shadow-[inset_0_1px_0_rgb(255_255_255_/_0.18)] backdrop-blur-xl transition-all duration-300 ease-out hover:-translate-y-0.5 hover:border-foreground/30 hover:bg-foreground/[0.07] active:translate-y-0 active:scale-[0.985] sm:h-11 sm:px-5 sm:text-sm dark:border-white/15 dark:bg-white/[0.045] dark:text-white/90 dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.08),0_12px_34px_rgb(0_0_0_/_0.25)] dark:hover:border-white/28 dark:hover:bg-white/[0.085] dark:hover:text-white";
 
@@ -39,10 +61,9 @@ function MemoryRoomPreview() {
   return (
     <div
       aria-hidden="true"
-      className="relative mx-auto mt-10 min-h-[360px] w-full max-w-sm sm:min-h-[430px] lg:mt-0 lg:block lg:min-h-[540px] lg:max-w-md"
+      className="relative mx-auto mt-8 min-h-[340px] w-full max-w-[28rem] sm:min-h-[430px] lg:mt-0 lg:min-h-[540px] lg:max-w-[34rem]"
     >
-      <div className="absolute inset-x-8 bottom-8 h-20 rounded-full bg-foreground/10 blur-3xl dark:bg-cyan-300/10" />
-      <div className="absolute inset-0 rounded-[2.5rem] bg-[radial-gradient(circle_at_50%_40%,var(--muted),transparent_58%)] opacity-45 dark:bg-[radial-gradient(circle_at_50%_42%,rgb(34_211_238_/_0.14),transparent_62%)]" />
+      <div className="absolute inset-x-6 bottom-10 top-9 rounded-[2rem] border border-white/10 bg-white/[0.012] shadow-[0_28px_90px_rgb(0_0_0_/_0.55)] sm:inset-x-8 lg:inset-x-10" />
       <div className="absolute inset-0 grid place-items-center">
         <Image
           src="/assets/vintage-polaroid-camera.png"
@@ -50,8 +71,8 @@ function MemoryRoomPreview() {
           width={760}
           height={760}
           priority
-          sizes="(min-width: 1024px) 430px, 70vw"
-          className="h-auto w-[82%] max-w-[25rem] drop-shadow-[0_30px_70px_rgb(0_0_0_/_0.18)] dark:drop-shadow-[0_28px_90px_rgb(34_211_238_/_0.18)]"
+          sizes="(min-width: 1024px) 520px, 82vw"
+          className="h-auto w-[90%] max-w-[30rem] drop-shadow-[0_42px_82px_rgb(0_0_0_/_0.66)]"
         />
       </div>
     </div>
@@ -65,9 +86,16 @@ export default async function Home() {
   const isSignedIn = Boolean(user);
 
   return (
-    <main className="min-h-screen overflow-hidden bg-background">
-      <section className="relative min-h-screen overflow-hidden">
-        <AuroraBackground />
+    <main id="clay-landing-page" className="min-h-screen overflow-hidden bg-background">
+      <ScrollProgressRail />
+      <p
+        aria-hidden="true"
+        className="pointer-events-none fixed bottom-6 right-7 z-40 select-none font-byline text-[0.72rem] lowercase tracking-[0.22em] text-black/35 dark:text-[#f7efe0]/35"
+      >
+        pre production v1
+      </p>
+      <IntroSplash />
+      <section className="relative min-h-screen overflow-hidden bg-[#000000] text-[#f7efe0] [--background:#000000] [--border:rgba(255,255,255,0.14)] [--foreground:#f7efe0] [--muted-foreground:#8f8f8f]">
         <header className="relative z-10 mx-auto flex w-full max-w-6xl flex-col items-start gap-5 px-6 py-6 sm:h-28 sm:flex-row sm:items-center sm:justify-between sm:py-0">
           <Logo size="large" />
           <nav className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -104,53 +132,59 @@ export default async function Home() {
                 </Link>
               </>
             )}
-            <ThemeToggle />
           </nav>
         </header>
 
-        <div className="relative z-10 mx-auto grid min-h-[calc(100vh-7rem)] w-full max-w-6xl items-center gap-14 px-6 pb-20 pt-10 lg:grid-cols-[1fr_0.74fr]">
-          <div className="max-w-4xl">
-            <div className="inline-flex flex-col items-start">
-              <h1 className="font-brand text-7xl leading-none text-foreground sm:text-8xl md:text-9xl">
-                ClaY.
-              </h1>
-              <p className="font-byline mt-3 text-2xl text-muted-foreground">
-                by tharun
+        <div className="relative z-10 mx-auto grid min-h-[calc(100vh-7rem)] w-full max-w-6xl px-6 pb-12 pt-4 lg:pb-16">
+          <div className="grid items-center gap-10 py-8 lg:grid-cols-[0.96fr_0.82fr] lg:gap-14 lg:py-4">
+            <div className="max-w-4xl">
+              <p className="text-xs uppercase tracking-[0.32em] text-[#f7efe0]/42 sm:text-sm">
+                Private photo room
+              </p>
+              <h2 className="mt-7 max-w-[760px] text-[clamp(2.75rem,14vw,4.5rem)] leading-none tracking-normal text-[#f7efe0] md:text-[clamp(4rem,7vw,7rem)] md:leading-[0.98]">
+                Before the photos scatter.
+              </h2>
+              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#f7efe0]/58 sm:text-xl sm:leading-9">
+                Create one private room, invite your people, and keep every view
+                of the occasion in one place.
+              </p>
+              <div className="mt-10 flex flex-col gap-4 sm:flex-row">
+                <Link
+                  href={isSignedIn ? "/rooms/new" : "/auth/sign-up"}
+                  className={secondHeroPrimaryButton}
+                >
+                  Start a room
+                  <span className="grid size-10 place-items-center rounded-full bg-background/95 text-foreground shadow-[inset_0_1px_0_rgb(255_255_255_/_0.28)] transition-transform duration-300 ease-out group-hover:translate-x-1 sm:size-11 dark:bg-black dark:text-[#f7efe0]">
+                    <ArrowRight className="size-4" />
+                  </span>
+                </Link>
+                <Link
+                  href="#how-it-works"
+                  className={`${landingSecondaryButton} ${landingHeroButtonFrame} px-8`}
+                >
+                  How it works
+                </Link>
+              </div>
+              <p className="mt-5 text-sm text-[#f7efe0]/40">
+                Built for trips, weddings, birthdays, reunions.
               </p>
             </div>
-            <h2 className="mt-14 max-w-3xl text-5xl leading-tight text-foreground md:text-7xl">
-              One room for every memory.
-            </h2>
-            <p className="mt-8 max-w-2xl text-lg leading-8 text-muted-foreground">
-              Create a private room for a trip, event, or occasion. Invite everyone,
-              collect every perspective, and shape shared photos into beautiful
-              photobooks.
-            </p>
-            <div className="mt-10 flex flex-col gap-4 sm:flex-row">
-              <Link
-                href={isSignedIn ? "/rooms/new" : "/auth/sign-up"}
-                className={landingHeroPrimaryButton}
-              >
-                Start a room
-                <span className="grid size-10 place-items-center rounded-full bg-background/95 text-foreground shadow-[inset_0_1px_0_rgb(255_255_255_/_0.28)] transition-transform duration-300 ease-out group-hover:translate-x-1 sm:size-11 dark:bg-black dark:text-[#f7efe0]">
-                  <ArrowRight className="size-4" />
-                </span>
-              </Link>
-              <Link
-                href="#how-it-works"
-                className={`${landingSecondaryButton} ${landingHeroButtonFrame} px-8`}
-              >
-                How it works
-              </Link>
-            </div>
+
+            <MemoryRoomPreview />
           </div>
 
-          <MemoryRoomPreview />
-          <div className="border-y py-6 text-sm text-muted-foreground lg:col-span-2">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <p>Private rooms for shared memories.</p>
-              <p>Every uploader stays credited.</p>
-              <p>Photobook-ready from the beginning.</p>
+          <div className="border-y border-white/10 py-5 text-[#f7efe0]">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {heroProcessSteps.map((step) => (
+                <div key={step.number} className="flex items-center gap-4">
+                  <span className="text-xs text-[#f7efe0]/32">
+                    {step.number}
+                  </span>
+                  <span className="text-sm text-[#f7efe0]/62">
+                    {step.title}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
