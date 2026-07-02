@@ -245,18 +245,6 @@
   }
 }
 
-@keyframes clayScrollDiscoverCue {
-  0%,
-  100% {
-    opacity: 0.38;
-    transform: translate(-50%, 0);
-  }
-  50% {
-    opacity: 0.62;
-    transform: translate(-50%, 4px);
-  }
-}
-
 .clay-intro-splash {
   --intro-cream: rgb(255 246 224 / 56%);
   --intro-amber: rgb(255 196 87 / 30%);
@@ -264,10 +252,6 @@
   --intro-cyan: rgb(158 227 235 / 28%);
   --intro-teal: rgb(94 196 190 / 22%);
   --intro-blue: rgb(147 178 214 / 22%);
-}
-
-.clay-scroll-discover-cue {
-  animation: clayScrollDiscoverCue 3.6s ease-in-out infinite;
 }
 
 .clay-intro-splash::after {
@@ -504,7 +488,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .clay-scroll-discover-cue,
   .clay-intro-band,
   .clay-intro-glow,
   .clay-aurora::before,

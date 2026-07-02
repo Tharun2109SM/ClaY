@@ -41,7 +41,7 @@ export function PhotoPages({ photos }: { photos: PhotoAsset[] }) {
             key={pagePhotos.map((photo) => photo.id).join("-")}
             data-photobook-page="true"
             data-photobook-page-label={`photo page ${pageIndex + 1}`}
-            className="aspect-[4/5] min-h-0 overflow-hidden rounded-lg border bg-card p-3 shadow-sm"
+            className="aspect-[4/5] min-h-0 overflow-hidden rounded-lg border border-black/[0.10] bg-card p-3 shadow-[0_12px_36px_rgb(0_0_0_/_0.08)] dark:border-white/[0.10] dark:shadow-[0_16px_46px_rgb(0_0_0_/_0.32)]"
           >
             <div className={`grid size-full gap-3 ${layoutClass(pagePhotos.length)}`}>
               {pagePhotos.map((photo) => (

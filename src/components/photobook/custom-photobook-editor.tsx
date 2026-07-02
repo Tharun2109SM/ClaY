@@ -372,7 +372,7 @@ function EditablePhotoBlock({
     <div
       className={cn(
         "group/photo absolute touch-none select-none overflow-visible",
-        !exportCopy && "cursor-move",
+        !exportCopy && "cursor-grab active:cursor-grabbing",
       )}
       style={{
         left: `${block.x}%`,
@@ -386,11 +386,8 @@ function EditablePhotoBlock({
     >
       <div
         className={cn(
-          "relative size-full overflow-hidden rounded-2xl border bg-white/8",
+          "relative size-full overflow-hidden rounded-2xl border border-black/10 bg-white/8 dark:border-white/14",
           block.rotation ? "shadow-[0_18px_40px_rgb(0_0_0_/_0.22)]" : "",
-          selected && !exportCopy
-            ? "border-white ring-2 ring-black/45 dark:ring-white/45"
-            : "border-white/14",
         )}
       >
         {photo && photoUrl ? (
@@ -414,6 +411,7 @@ function EditablePhotoBlock({
 
       {selected && !exportCopy ? (
         <div className="photobook-editor-chrome absolute inset-0 pointer-events-none">
+          <div className="absolute inset-0 rounded-2xl border border-black/[0.28] dark:border-white/[0.35]" />
           {(["nw", "ne", "sw", "se", "n", "s", "e", "w"] as ResizeHandle[]).map(
             (handle) => (
               <button
@@ -421,22 +419,24 @@ function EditablePhotoBlock({
                 type="button"
                 aria-label={`Resize ${handle}`}
                 className={cn(
-                  "pointer-events-auto absolute size-3 rounded-full border border-black bg-white shadow-sm",
-                  handle === "nw" && "-left-1.5 -top-1.5 cursor-nwse-resize",
-                  handle === "ne" && "-right-1.5 -top-1.5 cursor-nesw-resize",
-                  handle === "sw" && "-bottom-1.5 -left-1.5 cursor-nesw-resize",
-                  handle === "se" && "-bottom-1.5 -right-1.5 cursor-nwse-resize",
+                  "pointer-events-auto absolute grid size-5 place-items-center transition duration-200 hover:scale-110",
+                  handle === "nw" && "-left-2.5 -top-2.5 cursor-nwse-resize",
+                  handle === "ne" && "-right-2.5 -top-2.5 cursor-nesw-resize",
+                  handle === "sw" && "-bottom-2.5 -left-2.5 cursor-nesw-resize",
+                  handle === "se" && "-bottom-2.5 -right-2.5 cursor-nwse-resize",
                   handle === "n" &&
-                    "left-1/2 -top-1.5 -translate-x-1/2 cursor-ns-resize",
+                    "left-1/2 -top-2.5 -translate-x-1/2 cursor-ns-resize",
                   handle === "s" &&
-                    "bottom-[-0.375rem] left-1/2 -translate-x-1/2 cursor-ns-resize",
+                    "-bottom-2.5 left-1/2 -translate-x-1/2 cursor-ns-resize",
                   handle === "e" &&
-                    "right-[-0.375rem] top-1/2 -translate-y-1/2 cursor-ew-resize",
+                    "-right-2.5 top-1/2 -translate-y-1/2 cursor-ew-resize",
                   handle === "w" &&
-                    "left-[-0.375rem] top-1/2 -translate-y-1/2 cursor-ew-resize",
+                    "-left-2.5 top-1/2 -translate-y-1/2 cursor-ew-resize",
                 )}
                 onPointerDown={(event) => startInteraction(event, handle)}
-              />
+              >
+                <span className="size-[7px] rounded-full border border-white/80 bg-black/85 shadow-[0_1px_4px_rgb(0_0_0_/_0.2)] dark:border-black/55 dark:bg-white/90" />
+              </button>
             ),
           )}
         </div>
@@ -492,9 +492,9 @@ function PhotobookPageCanvas({
           : undefined
       }
       className={cn(
-        "relative mx-auto aspect-[4/5] w-full max-w-[34rem] overflow-hidden rounded-[1.25rem] border shadow-[0_28px_90px_rgb(0_0_0_/_0.16)]",
+        "relative mx-auto aspect-[4/5] w-full max-w-[34rem] overflow-hidden rounded-[1.25rem] border shadow-[0_18px_58px_rgb(0_0_0_/_0.12)] dark:shadow-[0_22px_72px_rgb(0_0_0_/_0.42)]",
         !exportCopy && "touch-none",
-        darkBackground ? "border-white/14" : "border-black/10",
+        darkBackground ? "border-white/[0.10]" : "border-black/[0.10]",
         className,
       )}
       style={{
@@ -552,7 +552,7 @@ function PhotobookCreditPage({ order }: { order: number }) {
       data-photobook-page-order={String(order)}
       data-photobook-page-kind="credit"
       data-photobook-export-copy="true"
-      className="photobook-credit-page mx-auto grid aspect-[4/5] w-[34rem] overflow-hidden rounded-[1.25rem] border border-black/10 bg-[#ffffff] text-[#050505] shadow-[0_28px_90px_rgb(0_0_0_/_0.12)] dark:border-white/14 dark:bg-[#050505] dark:text-[#f7efe0]"
+      className="photobook-credit-page mx-auto grid aspect-[4/5] w-[34rem] overflow-hidden rounded-[1.25rem] border border-black/[0.10] bg-[#ffffff] text-[#050505] shadow-[0_18px_58px_rgb(0_0_0_/_0.10)] dark:border-white/[0.10] dark:bg-[#050505] dark:text-[#f7efe0]"
     >
       <div className="grid justify-items-center gap-3 text-center">
         <p className="text-sm uppercase tracking-[0.24em] text-[#737373] dark:text-[#a3a3a3]">

@@ -18,16 +18,6 @@ export function IntroSplash() {
         <ThemeToggle variant="intro" />
       </div>
 
-      <div
-        aria-hidden="true"
-        className="clay-scroll-discover-cue absolute bottom-10 left-1/2 z-20 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-3 text-center text-[#050505]/45 dark:text-[#f7efe0]/45"
-      >
-        <p className="text-xs lowercase tracking-[0.24em] [text-indent:0.24em] sm:text-[0.8rem]">
-          scroll to discover
-        </p>
-        <span className="mx-auto h-7 w-px bg-current opacity-45" />
-      </div>
-
       <div className="relative z-10 grid min-h-screen place-items-center px-6 py-20">
         <div className="inline-flex items-start justify-center gap-3 sm:gap-5">
           <span className="font-brand text-[clamp(5.5rem,18vw,16rem)] leading-none tracking-normal">

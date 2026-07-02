@@ -1,9 +1,20 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type RefObject,
+} from "react";
 import { Check, Type } from "lucide-react";
 import { updatePhotobookCoverAction } from "@/app/actions";
+import {
+  EditableTextBox,
+  type EditableTextGeometry,
+} from "@/components/photobook/editable-text-box";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,14 +75,6 @@ const legacyColorValues: Record<string, string> = {
   rose: "#f3d3c8",
 };
 
-const positionCoordinates: Record<CoverTextPosition, CoverTextCoordinates> = {
-  "top-left": { x: 0.18, y: 0.18 },
-  "top-center": { x: 0.5, y: 0.16 },
-  center: { x: 0.5, y: 0.5 },
-  "bottom-left": { x: 0.18, y: 0.82 },
-  "bottom-center": { x: 0.5, y: 0.82 },
-};
-
 const overlayOptions: { value: CoverOverlayStyle; label: string }[] = [
   { value: "none", label: "None" },
   { value: "soft", label: "Soft" },
@@ -95,34 +98,38 @@ type CoverTextCoordinates = {
   y: number;
 };
 
-type CoverTextInteraction =
-  | { type: "idle" }
-  | { type: "drag" }
-  | {
-      type: "resize";
-      centerX: number;
-      centerY: number;
-      initialDistance: number;
-      initialScale: number;
-    }
-  | {
-      type: "width";
-      side: "left" | "right";
-      startClientX: number;
-      coverWidth: number;
-      initialWidth: number;
-    };
+type CoverEditableTextSettings = EditableTextGeometry & {
+  font: CoverFont;
+  color: string;
+};
 
-type SavedCoverTextSettings = CoverTextCoordinates & {
+type SavedCoverTextSettings = {
+  version?: 2;
+  titleText?: Partial<CoverEditableTextSettings>;
+  subtitleText?: Partial<CoverEditableTextSettings>;
+};
+
+type LegacySavedCoverTextSettings = CoverTextCoordinates & {
   scale?: number;
   width?: number;
 };
 
-const minTextScale = 0.6;
-const maxTextScale = 2.2;
-const defaultTextBoxWidth = 0.65;
-const minTextBoxWidth = 0.25;
-const maxTextBoxWidth = 0.9;
+const minTextScale = 0.35;
+const maxTextScale = 2.5;
+const defaultTitleText: EditableTextGeometry = {
+  x: 0.5,
+  y: 0.45,
+  scale: 1,
+  width: 0.65,
+};
+const defaultSubtitleText: EditableTextGeometry = {
+  x: 0.5,
+  y: 0.56,
+  scale: 0.55,
+  width: 0.45,
+};
+const minTextBoxWidth = 0.15;
+const maxTextBoxWidth = 0.95;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -143,6 +150,69 @@ function isCoverTextCoordinates(value: unknown): value is CoverTextCoordinates {
   );
 }
 
+function isSavedCoverTextSettings(value: unknown): value is SavedCoverTextSettings {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const settings = value as Partial<SavedCoverTextSettings>;
+
+  return Boolean(settings.titleText || settings.subtitleText);
+}
+
+function resolveTextColor(color: string) {
+  return color.startsWith("#") ? color : legacyColorValues[color] ?? "#fff8e7";
+}
+
+function getFontClass(font: CoverFont) {
+  return fontOptions.find((option) => option.value === font)?.className ?? "font-serif";
+}
+
+function clampTextBoxWidth(width: number, x: number, scale: number) {
+  const maxWidthForPosition = Math.max(
+    minTextBoxWidth,
+    Math.min(maxTextBoxWidth, ((Math.min(x, 1 - x) - 0.02) * 2) / scale),
+  );
+
+  return clamp(width, minTextBoxWidth, maxWidthForPosition);
+}
+
+function normalizeTextSettings(
+  value: Partial<CoverEditableTextSettings> | null | undefined,
+  fallbackGeometry: EditableTextGeometry,
+  fallbackFont: CoverFont,
+  fallbackColor: string,
+): CoverEditableTextSettings {
+  const savedFont = value?.font;
+  const scale =
+    typeof value?.scale === "number" && Number.isFinite(value.scale)
+      ? clamp(value.scale, minTextScale, maxTextScale)
+      : fallbackGeometry.scale;
+  const x =
+    typeof value?.x === "number" && Number.isFinite(value.x)
+      ? clamp(value.x, 0.05, 0.95)
+      : fallbackGeometry.x;
+
+  return {
+    x,
+    y:
+      typeof value?.y === "number" && Number.isFinite(value.y)
+        ? clamp(value.y, 0.05, 0.95)
+        : fallbackGeometry.y,
+    scale,
+    width:
+      typeof value?.width === "number" && Number.isFinite(value.width)
+        ? clampTextBoxWidth(value.width, x, scale)
+        : fallbackGeometry.width,
+    font: fontOptions.some((option) => option.value === savedFont)
+      ? (savedFont as CoverFont)
+      : fallbackFont,
+    color: resolveTextColor(
+      typeof value?.color === "string" ? value.color : fallbackColor,
+    ),
+  };
+}
+
 function getLegacyPositionFromCoordinates({
   x,
   y,
@@ -156,15 +226,6 @@ function getLegacyPositionFromCoordinates({
   }
 
   return "center";
-}
-
-function clampTextBoxWidth(width: number, x: number, scale: number) {
-  const maxWidthForPosition = Math.max(
-    minTextBoxWidth,
-    Math.min(maxTextBoxWidth, ((Math.min(x, 1 - x) - 0.02) * 2) / scale),
-  );
-
-  return clamp(width, minTextBoxWidth, maxWidthForPosition);
 }
 
 export function CoverCustomizer({
@@ -183,28 +244,40 @@ export function CoverCustomizer({
   );
   const [title, setTitle] = useState(photobook.cover_title);
   const [subtitle, setSubtitle] = useState(photobook.cover_subtitle ?? "");
-  const [font, setFont] = useState<CoverFont>(photobook.cover_font);
-  const [color, setColor] = useState(photobook.cover_text_color);
-  const [textPosition, setTextPosition] = useState<CoverTextCoordinates>(
-    positionCoordinates[photobook.cover_text_position] ?? positionCoordinates.center,
+  const initialTextColor = resolveTextColor(photobook.cover_text_color);
+  const [titleText, setTitleText] = useState<CoverEditableTextSettings>(
+    normalizeTextSettings(
+      {
+        ...defaultTitleText,
+        font: photobook.cover_font,
+        color: initialTextColor,
+      },
+      defaultTitleText,
+      photobook.cover_font,
+      initialTextColor,
+    ),
   );
-  const [textScale, setTextScale] = useState(1);
-  const [textBoxWidth, setTextBoxWidth] = useState(defaultTextBoxWidth);
-  const [isDraggingText, setIsDraggingText] = useState(false);
-  const [isResizingText, setIsResizingText] = useState(false);
-  const [isTextSelected, setIsTextSelected] = useState(false);
+  const [subtitleText, setSubtitleText] = useState<CoverEditableTextSettings>(
+    normalizeTextSettings(
+      {
+        ...defaultSubtitleText,
+        font: photobook.cover_font,
+        color: initialTextColor,
+      },
+      defaultSubtitleText,
+      photobook.cover_font,
+      initialTextColor,
+    ),
+  );
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<CoverOverlayStyle>(
     photobook.cover_overlay_style,
   );
-  const [customColor, setCustomColor] = useState(
-    photobook.cover_text_color.startsWith("#")
-      ? photobook.cover_text_color
-      : "#ffffff",
-  );
-  const colorInputRef = useRef<HTMLInputElement>(null);
+  const [titleCustomColor, setTitleCustomColor] = useState(initialTextColor);
+  const [subtitleCustomColor, setSubtitleCustomColor] = useState(initialTextColor);
+  const titleColorInputRef = useRef<HTMLInputElement>(null);
+  const subtitleColorInputRef = useRef<HTMLInputElement>(null);
   const coverRef = useRef<HTMLDivElement>(null);
-  const textGroupRef = useRef<HTMLDivElement>(null);
-  const textInteractionRef = useRef<CoverTextInteraction>({ type: "idle" });
   const hasLoadedSavedPositionRef = useRef(false);
   const storageKey = `clay-cover-text-position:${photobook.id}`;
 
@@ -212,244 +285,210 @@ export function CoverCustomizer({
     () => photos.find((photo) => photo.id === coverPhotoId) ?? photos[0],
     [coverPhotoId, photos],
   );
-  const fontClass =
-    fontOptions.find((option) => option.value === font)?.className ?? "font-serif";
-  const selectedColorValue = color.startsWith("#")
-    ? color
-    : legacyColorValues[color] ?? "#fff8e7";
-  const isCustomColor =
-    color.startsWith("#") &&
-    !colorOptions.some((option) => option.value.toLowerCase() === color.toLowerCase());
+  const isCustomTitleColor =
+    titleText.color.startsWith("#") &&
+    !colorOptions.some(
+      (option) => option.value.toLowerCase() === titleText.color.toLowerCase(),
+    );
+  const isCustomSubtitleColor =
+    subtitleText.color.startsWith("#") &&
+    !colorOptions.some(
+      (option) => option.value.toLowerCase() === subtitleText.color.toLowerCase(),
+    );
 
-  const controlSectionClass = "grid gap-3";
+  const controlSectionClass =
+    "grid gap-4 border-b border-border/35 pb-6 last:border-b-0 last:pb-0 dark:border-white/[0.08]";
   const controlLabelClass =
-    "text-xs uppercase tracking-[0.18em] text-muted-foreground";
+    "text-[0.66rem] uppercase tracking-[0.24em] text-muted-foreground/75";
+  const controlSubLabelClass = "text-xs text-muted-foreground/80";
+  const inspectorInputClass =
+    "h-12 rounded-2xl border-border/50 bg-background/65 px-4 text-sm shadow-none transition-all duration-200 placeholder:text-muted-foreground/45 hover:border-foreground/20 hover:bg-background/80 focus-visible:border-foreground/35 focus-visible:ring-2 focus-visible:ring-foreground/10 focus-visible:ring-offset-0 dark:border-white/[0.09] dark:bg-white/[0.045] dark:hover:border-white/20 dark:hover:bg-white/[0.065]";
   const pillClass =
-    "h-9 rounded-full border px-3 text-xs font-normal transition-all duration-200 hover:border-foreground/30";
-  const legacyPosition = getLegacyPositionFromCoordinates(textPosition);
-
-  function getClampedTextPosition(x: number, y: number): CoverTextCoordinates {
-    const safeX = clamp((textBoxWidth * textScale) / 2 + 0.02, 0.05, 0.49);
-    const safeY = clamp(0.055 * textScale, 0.06, 0.12);
-
-    return {
-      x: clamp(x, safeX, 1 - safeX),
-      y: clamp(y, safeY, 1 - safeY),
-    };
-  }
-
-  function getClampedTextBoxWidth(width: number, x = textPosition.x) {
-    return clampTextBoxWidth(width, x, textScale);
-  }
-
-  function updateTextPositionFromPointer(event: PointerEvent<HTMLElement>) {
-    const coverRect = coverRef.current?.getBoundingClientRect();
-
-    if (!coverRect || coverRect.width === 0 || coverRect.height === 0) {
-      return;
-    }
-
-    const nextX = (event.clientX - coverRect.left) / coverRect.width;
-    const nextY = (event.clientY - coverRect.top) / coverRect.height;
-
-    setTextPosition(getClampedTextPosition(nextX, nextY));
-  }
-
-  function clampTextPositionAfterResize(nextScale: number) {
-    requestAnimationFrame(() => {
-      setTextPosition((currentPosition) => getClampedTextPosition(
-        currentPosition.x,
-        currentPosition.y,
-      ));
-    });
-
-    return clamp(nextScale, minTextScale, maxTextScale);
-  }
-
-  function updateTextScaleFromPointer(event: PointerEvent<HTMLElement>) {
-    const interaction = textInteractionRef.current;
-
-    if (interaction.type !== "resize") {
-      return;
-    }
-
-    const nextDistance = Math.max(
-      1,
-      Math.hypot(event.clientX - interaction.centerX, event.clientY - interaction.centerY),
-    );
-    const nextScale =
-      interaction.initialScale * (nextDistance / interaction.initialDistance);
-
-    setTextScale(clampTextPositionAfterResize(nextScale));
-  }
-
-  function updateTextBoxWidthFromPointer(event: PointerEvent<HTMLElement>) {
-    const interaction = textInteractionRef.current;
-
-    if (interaction.type !== "width") {
-      return;
-    }
-
-    const deltaX = (event.clientX - interaction.startClientX) / interaction.coverWidth;
-    const direction = interaction.side === "right" ? 1 : -1;
-    const nextWidth = getClampedTextBoxWidth(
-      interaction.initialWidth + deltaX * direction,
-    );
-
-    setTextBoxWidth(nextWidth);
-    setTextPosition((currentPosition) =>
-      getClampedTextPosition(currentPosition.x, currentPosition.y),
-    );
-  }
-
-  function handleTextPointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (!isHost) {
-      return;
-    }
-
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    textInteractionRef.current = { type: "drag" };
-    setIsTextSelected(true);
-    setIsDraggingText(true);
-    updateTextPositionFromPointer(event);
-  }
+    "h-8 rounded-full border px-3.5 text-xs font-normal shadow-none transition-all duration-200 active:scale-[0.98]";
+  const selectedPillClass =
+    "border-foreground bg-foreground text-background shadow-[inset_0_1px_0_rgb(255_255_255_/_0.18),0_8px_24px_rgb(0_0_0_/_0.08)] hover:bg-foreground/90 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90";
+  const idlePillClass =
+    "border-border/55 bg-background/35 text-muted-foreground hover:border-foreground/30 hover:bg-muted/45 hover:text-foreground dark:border-white/[0.09] dark:bg-white/[0.035] dark:hover:bg-white/[0.075]";
+  const legacyPosition = getLegacyPositionFromCoordinates(titleText);
 
   function handleCoverPointerDown(event: PointerEvent<HTMLDivElement>) {
-    const targetNode = event.target instanceof Node ? event.target : null;
+    const target = event.target instanceof Element ? event.target : null;
 
-    if (targetNode && !textGroupRef.current?.contains(targetNode)) {
-      setIsTextSelected(false);
+    if (!target?.closest("[data-photobook-editable='true']")) {
+      setSelectedTextId(null);
     }
   }
 
-  function handleTextResizePointerDown(event: PointerEvent<HTMLButtonElement>) {
-    if (!isHost) {
-      return;
-    }
+  function resetTitleText() {
+    setTitleText((current) => ({ ...current, ...defaultTitleText }));
+    setSelectedTextId("cover-title");
+  }
 
-    const coverRect = coverRef.current?.getBoundingClientRect();
+  function resetSubtitleText() {
+    setSubtitleText((current) => ({ ...current, ...defaultSubtitleText }));
+    setSelectedTextId("cover-subtitle");
+  }
 
-    if (!coverRect || coverRect.width === 0 || coverRect.height === 0) {
-      return;
-    }
+  function resetAllText() {
+    resetTitleText();
+    setSubtitleText((current) => ({ ...current, ...defaultSubtitleText }));
+  }
 
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-
-    const centerX = coverRect.left + textPosition.x * coverRect.width;
-    const centerY = coverRect.top + textPosition.y * coverRect.height;
-    const initialDistance = Math.max(
-      1,
-      Math.hypot(event.clientX - centerX, event.clientY - centerY),
+  function renderFontControls(
+    value: CoverFont,
+    onChange: (font: CoverFont) => void,
+  ) {
+    return (
+      <div className="flex flex-wrap gap-2">
+        {fontOptions.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn(
+              pillClass,
+              value === option.value ? selectedPillClass : idlePillClass,
+              option.className,
+            )}
+            onClick={() => onChange(option.value)}
+            disabled={!isHost}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
     );
-
-    textInteractionRef.current = {
-      type: "resize",
-      centerX,
-      centerY,
-      initialDistance,
-      initialScale: textScale,
-    };
-    setIsTextSelected(true);
-    setIsResizingText(true);
   }
 
-  function handleTextWidthPointerDown(event: PointerEvent<HTMLButtonElement>) {
-    if (!isHost) {
-      return;
-    }
-
-    const side = event.currentTarget.dataset.side;
-    const coverRect = coverRef.current?.getBoundingClientRect();
-
-    if ((side !== "left" && side !== "right") || !coverRect || coverRect.width === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    textInteractionRef.current = {
-      type: "width",
-      side,
-      startClientX: event.clientX,
-      coverWidth: coverRect.width,
-      initialWidth: textBoxWidth,
-    };
-    setIsTextSelected(true);
-    setIsResizingText(true);
-  }
-
-  function handleTextPointerMove(event: PointerEvent<HTMLElement>) {
-    const interaction = textInteractionRef.current;
-
-    if (interaction.type === "idle") {
-      return;
-    }
-
-    event.preventDefault();
-
-    if (interaction.type === "drag") {
-      updateTextPositionFromPointer(event);
-      return;
-    }
-
-    if (interaction.type === "resize") {
-      updateTextScaleFromPointer(event);
-      return;
-    }
-
-    updateTextBoxWidthFromPointer(event);
-  }
-
-  function handleTextPointerEnd(event: PointerEvent<HTMLElement>) {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    textInteractionRef.current = { type: "idle" };
-    setIsDraggingText(false);
-    setIsResizingText(false);
+  function renderColorControls({
+    value,
+    customValue,
+    isCustom,
+    inputRef,
+    onCustomValueChange,
+    onChange,
+    ariaLabel,
+  }: {
+    value: string;
+    customValue: string;
+    isCustom: boolean;
+    inputRef: RefObject<HTMLInputElement | null>;
+    onCustomValueChange: (color: string) => void;
+    onChange: (color: string) => void;
+    ariaLabel: string;
+  }) {
+    return (
+      <div className="flex flex-wrap gap-2.5">
+        {colorOptions.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            aria-label={option.label}
+            title={option.label}
+            className={cn(
+              "grid size-7 place-items-center rounded-full border shadow-[inset_0_0_0_1px_rgb(255_255_255_/_0.2),0_3px_12px_rgb(0_0_0_/_0.08)] transition-all duration-200 hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50",
+              value.toLowerCase() === option.value.toLowerCase()
+                ? "border-foreground ring-2 ring-foreground/20 ring-offset-2 ring-offset-background"
+                : "border-border/60 hover:border-foreground/40",
+            )}
+            style={{ backgroundColor: option.value }}
+            onClick={() => onChange(option.value)}
+            disabled={!isHost}
+          >
+            {value.toLowerCase() === option.value.toLowerCase() ? (
+              <Check
+                className={cn(
+                  "size-3",
+                  option.value === "#050505" ? "text-white" : "text-black",
+                )}
+              />
+            ) : null}
+          </button>
+        ))}
+        <button
+          type="button"
+          aria-label="Custom color"
+          title="Custom"
+          className={cn(
+            "grid size-7 place-items-center rounded-full border bg-[conic-gradient(from_0deg,#ff4d4d,#ffc457,#9ff3d4,#32dcdc,#8fd3ff,#b9a7ff,#ff4d4d)] shadow-[0_3px_12px_rgb(0_0_0_/_0.08)] transition-all duration-200 hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50",
+            isCustom
+              ? "border-foreground ring-2 ring-foreground/20 ring-offset-2 ring-offset-background"
+              : "border-border/60 hover:border-foreground/40",
+          )}
+          onClick={() => inputRef.current?.click()}
+          disabled={!isHost}
+        >
+          {isCustom ? <Check className="size-3 text-black" /> : null}
+        </button>
+        <input
+          ref={inputRef}
+          type="color"
+          value={customValue}
+          className="sr-only"
+          onChange={(event) => {
+            onCustomValueChange(event.currentTarget.value);
+            onChange(event.currentTarget.value);
+          }}
+          disabled={!isHost}
+          aria-label={ariaLabel}
+        />
+      </div>
+    );
   }
 
   useEffect(() => {
     hasLoadedSavedPositionRef.current = false;
     const savedPosition = localStorage.getItem(storageKey);
-    let nextPosition: CoverTextCoordinates | null = null;
-    let nextScale: number | null = null;
-    let nextWidth: number | null = null;
+    let nextTitleText: CoverEditableTextSettings | null = null;
+    let nextSubtitleText: CoverEditableTextSettings | null = null;
 
     if (savedPosition) {
       try {
         const parsedPosition: unknown = JSON.parse(savedPosition);
 
-        if (isCoverTextCoordinates(parsedPosition)) {
-          const savedSettings = parsedPosition as SavedCoverTextSettings;
+        if (isSavedCoverTextSettings(parsedPosition)) {
+          nextTitleText = normalizeTextSettings(
+            parsedPosition.titleText,
+            defaultTitleText,
+            photobook.cover_font,
+            initialTextColor,
+          );
+          nextSubtitleText = normalizeTextSettings(
+            parsedPosition.subtitleText,
+            defaultSubtitleText,
+            photobook.cover_font,
+            initialTextColor,
+          );
+        } else if (isCoverTextCoordinates(parsedPosition)) {
+          const savedSettings = parsedPosition as LegacySavedCoverTextSettings;
 
-          nextPosition = {
-            x: clamp(parsedPosition.x, 0.05, 0.95),
-            y: clamp(parsedPosition.y, 0.05, 0.95),
-          };
-
-          if (
-            typeof savedSettings.scale === "number" &&
-            Number.isFinite(savedSettings.scale)
-          ) {
-            nextScale = clamp(savedSettings.scale, minTextScale, maxTextScale);
-          }
-
-          if (
-            typeof savedSettings.width === "number" &&
-            Number.isFinite(savedSettings.width)
-          ) {
-            nextWidth = clampTextBoxWidth(
-              savedSettings.width,
-              nextPosition.x,
-              nextScale ?? 1,
-            );
-          }
+          nextTitleText = normalizeTextSettings(
+            {
+              x: savedSettings.x,
+              y: savedSettings.y,
+              scale: savedSettings.scale,
+              width: savedSettings.width,
+              font: photobook.cover_font,
+              color: initialTextColor,
+            },
+            defaultTitleText,
+            photobook.cover_font,
+            initialTextColor,
+          );
+          nextSubtitleText = normalizeTextSettings(
+            {
+              x: nextTitleText.x,
+              y: clamp(nextTitleText.y + 0.11, 0.08, 0.92),
+              scale: 0.55,
+              width: Math.min(nextTitleText.width, defaultSubtitleText.width),
+              font: nextTitleText.font,
+              color: nextTitleText.color,
+            },
+            defaultSubtitleText,
+            photobook.cover_font,
+            initialTextColor,
+          );
         }
       } catch {
         localStorage.removeItem(storageKey);
@@ -457,21 +496,19 @@ export function CoverCustomizer({
     }
 
     queueMicrotask(() => {
-      if (nextPosition) {
-        setTextPosition(nextPosition);
+      if (nextTitleText) {
+        setTitleText(nextTitleText);
+        setTitleCustomColor(nextTitleText.color);
       }
 
-      if (nextScale !== null) {
-        setTextScale(nextScale);
-      }
-
-      if (nextWidth !== null) {
-        setTextBoxWidth(nextWidth);
+      if (nextSubtitleText) {
+        setSubtitleText(nextSubtitleText);
+        setSubtitleCustomColor(nextSubtitleText.color);
       }
 
       hasLoadedSavedPositionRef.current = true;
     });
-  }, [storageKey]);
+  }, [initialTextColor, photobook.cover_font, storageKey]);
 
   useEffect(() => {
     if (!isHost || !hasLoadedSavedPositionRef.current) {
@@ -480,23 +517,24 @@ export function CoverCustomizer({
 
     localStorage.setItem(
       storageKey,
-      JSON.stringify({ ...textPosition, scale: textScale, width: textBoxWidth }),
+      JSON.stringify({
+        version: 2,
+        titleText,
+        subtitleText,
+      }),
     );
-  }, [isHost, storageKey, textPosition, textScale, textBoxWidth]);
-
-  const showTextEditorChrome =
-    isHost && (isTextSelected || isDraggingText || isResizingText);
+  }, [isHost, storageKey, titleText, subtitleText]);
 
   return (
-    <section className="grid gap-8 lg:grid-cols-[minmax(480px,1fr)_minmax(380px,440px)] lg:items-start">
-      <div className="grid min-h-[70vh] place-items-center rounded-[2rem] border bg-muted/20 p-4 sm:p-6 lg:p-8">
+    <section className="flex flex-col gap-8 md:flex-row md:items-start md:gap-6 lg:gap-10">
+      <div className="grid min-h-[66vh] w-full min-w-0 place-items-center rounded-[2rem] border border-black/[0.08] bg-card/20 p-3 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.22)] dark:border-white/[0.07] dark:bg-white/[0.018] dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.04)] sm:p-4 md:flex-1 lg:p-5">
         <div
           data-photobook-page="true"
           data-photobook-page-id="cover"
           data-photobook-page-label="cover page"
           data-photobook-page-order="1"
           ref={coverRef}
-          className="relative mx-auto aspect-[4/5] w-full max-w-[34rem] overflow-hidden rounded-[1.25rem] border bg-muted shadow-[0_28px_90px_rgb(0_0_0_/_0.16)] dark:shadow-[0_28px_90px_rgb(0_0_0_/_0.55)]"
+          className="relative mx-auto aspect-[4/5] w-full max-w-[35rem] overflow-hidden rounded-[1.35rem] border border-black/[0.10] bg-muted shadow-[0_18px_52px_rgb(0_0_0_/_0.10)] dark:border-white/[0.10] dark:shadow-[0_22px_70px_rgb(0_0_0_/_0.46)]"
           onPointerDown={handleCoverPointerDown}
         >
           {selectedPhoto?.public_url ? (
@@ -516,319 +554,275 @@ export function CoverCustomizer({
             </div>
           )}
           <div className={cn("absolute inset-0", getOverlayClass(overlay))} />
-          <div
-            ref={textGroupRef}
-            role="button"
-            tabIndex={isHost ? 0 : -1}
-            aria-label="Drag cover title"
-            onKeyDown={(event) => {
-              if (!isHost) {
-                return;
-              }
-
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                setTextPosition(positionCoordinates.center);
-                setTextScale(1);
-                setTextBoxWidth(defaultTextBoxWidth);
-                setIsTextSelected(true);
-                return;
-              }
-
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setIsTextSelected(false);
-              }
-            }}
-            className={cn(
-              "group absolute select-none rounded-2xl p-3 touch-none transition-[outline-color,box-shadow] duration-200 md:p-4",
-              isHost ? "cursor-grab active:cursor-grabbing" : "",
-              isDraggingText || isResizingText ? "cursor-grabbing" : "",
-            )}
-            style={{
-              color: selectedColorValue,
-              left: `${textPosition.x * 100}%`,
-              top: `${textPosition.y * 100}%`,
-              width: `${textBoxWidth * 100}%`,
-              transform: `translate(-50%, -50%) scale(${textScale})`,
-              transformOrigin: "center",
-            }}
-            onPointerDown={handleTextPointerDown}
-            onPointerMove={handleTextPointerMove}
-            onPointerUp={handleTextPointerEnd}
-            onPointerCancel={handleTextPointerEnd}
+          <EditableTextBox
+            id="cover-title"
+            canvasRef={coverRef}
+            geometry={titleText}
+            selected={selectedTextId === "cover-title"}
+            editable={isHost}
+            color={resolveTextColor(titleText.color)}
+            ariaLabel="Drag cover title"
+            className="z-20 rounded-lg p-0"
+            chromeRadiusClassName="rounded-lg"
+            minScale={minTextScale}
+            maxScale={maxTextScale}
+            minWidth={minTextBoxWidth}
+            maxWidth={maxTextBoxWidth}
+            onGeometryChange={(geometry) =>
+              setTitleText((current) => ({ ...current, ...geometry }))
+            }
+            onSelect={setSelectedTextId}
           >
-            <div
-              aria-hidden="true"
+            <h2
               className={cn(
-                "photobook-editor-chrome pointer-events-none absolute inset-0 rounded-2xl border border-black/45 opacity-0 shadow-[0_12px_34px_rgb(0_0_0_/_0.08)] transition-opacity duration-200 dark:border-white/55",
-                isHost ? "group-hover:opacity-100 group-focus-visible:opacity-100" : "",
-                showTextEditorChrome ? "opacity-100" : "",
+                "w-full max-w-none whitespace-normal text-left text-4xl leading-none md:text-6xl",
+                getFontClass(titleText.font),
               )}
-            />
-            <h2 className={cn("text-4xl leading-none md:text-6xl", fontClass)}>
+              style={{ overflowWrap: "normal", wordBreak: "normal" }}
+            >
               {title || "ClaY. by tharun"}
             </h2>
-            {subtitle ? (
-              <p className="mt-4 text-sm font-medium uppercase tracking-[0.22em] md:text-base">
+          </EditableTextBox>
+          {subtitle ? (
+            <EditableTextBox
+              id="cover-subtitle"
+              canvasRef={coverRef}
+              geometry={subtitleText}
+              selected={selectedTextId === "cover-subtitle"}
+              editable={isHost}
+              color={resolveTextColor(subtitleText.color)}
+              ariaLabel="Drag cover subtitle"
+              className="z-30 rounded-lg p-0"
+              chromeRadiusClassName="rounded-lg"
+              minScale={minTextScale}
+              maxScale={maxTextScale}
+              minWidth={minTextBoxWidth}
+              maxWidth={maxTextBoxWidth}
+              onGeometryChange={(geometry) =>
+                setSubtitleText((current) => ({ ...current, ...geometry }))
+              }
+              onSelect={setSelectedTextId}
+            >
+              <p
+                className={cn(
+                  "text-sm font-medium uppercase leading-tight tracking-[0.22em] md:text-base",
+                  getFontClass(subtitleText.font),
+                )}
+              >
                 {subtitle}
               </p>
-            ) : null}
-            {isHost
-              ? ([
-                  ["-left-1 -top-1 cursor-nwse-resize", "Resize cover title"],
-                  ["-right-1 -top-1 cursor-nesw-resize", "Resize cover title"],
-                  ["-bottom-1 -left-1 cursor-nesw-resize", "Resize cover title"],
-                  ["-bottom-1 -right-1 cursor-nwse-resize", "Resize cover title"],
-                ] as const).map(([positionClass, label]) => (
-                  <button
-                    key={positionClass}
-                    type="button"
-                    aria-label={label}
-                    className={cn(
-                      "photobook-editor-chrome absolute size-2.5 rounded-full border border-white/90 bg-black/80 opacity-0 shadow-[0_2px_8px_rgb(0_0_0_/_0.28)] transition duration-200 hover:scale-125 dark:border-black/70 dark:bg-white/90",
-                      positionClass,
-                      "group-hover:opacity-100 group-focus-visible:opacity-100",
-                      showTextEditorChrome ? "opacity-100" : "",
-                    )}
-                    onPointerDown={handleTextResizePointerDown}
-                    onPointerMove={handleTextPointerMove}
-                    onPointerUp={handleTextPointerEnd}
-                    onPointerCancel={handleTextPointerEnd}
-                  />
-                ))
-              : null}
-            {isHost
-              ? ([
-                  ["left", "-left-1 top-1/2 -translate-y-1/2 cursor-ew-resize"],
-                  ["right", "-right-1 top-1/2 -translate-y-1/2 cursor-ew-resize"],
-                ] as const).map(([side, positionClass]) => (
-                  <button
-                    key={side}
-                    type="button"
-                    aria-label={`Adjust cover title ${side} edge`}
-                    className={cn(
-                      "photobook-editor-chrome absolute h-5 w-2 rounded-full border border-white/90 bg-black/80 opacity-0 shadow-[0_2px_8px_rgb(0_0_0_/_0.28)] transition duration-200 hover:scale-110 dark:border-black/70 dark:bg-white/90",
-                      positionClass,
-                      "group-hover:opacity-100 group-focus-visible:opacity-100",
-                      showTextEditorChrome ? "opacity-100" : "",
-                    )}
-                    data-side={side}
-                    onPointerDown={handleTextWidthPointerDown}
-                    onPointerMove={handleTextPointerMove}
-                    onPointerUp={handleTextPointerEnd}
-                    onPointerCancel={handleTextPointerEnd}
-                  />
-                ))
-              : null}
-          </div>
+            </EditableTextBox>
+          ) : null}
         </div>
       </div>
       <form
         action={updatePhotobookCoverAction}
-        className="grid w-full gap-6 rounded-[2rem] border bg-card p-5 shadow-none lg:sticky lg:top-28"
+        className="grid w-full gap-6 rounded-[2rem] border border-border/45 bg-card/90 p-5 shadow-[0_22px_70px_rgb(0_0_0_/_0.055)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-[#050505]/92 dark:shadow-[0_24px_80px_rgb(0_0_0_/_0.34)] sm:p-6 md:sticky md:top-28 md:w-[360px] md:max-w-[360px] md:shrink-0 lg:w-[420px] lg:max-w-[420px]"
       >
         <input type="hidden" name="room_id" value={roomId} />
         <input type="hidden" name="photobook_id" value={photobook.id} />
         <input type="hidden" name="cover_photo_id" value={coverPhotoId} />
-        <input type="hidden" name="cover_font" value={font} />
-        <input type="hidden" name="cover_text_color" value={color} />
+        <input type="hidden" name="cover_font" value={titleText.font} />
+        <input type="hidden" name="cover_text_color" value={titleText.color} />
         <input type="hidden" name="cover_text_position" value={legacyPosition} />
         <input type="hidden" name="cover_overlay_style" value={overlay} />
 
         <div className={controlSectionClass}>
-          <span className={controlLabelClass}>Text</span>
+          <span className={controlLabelClass}>Content</span>
           <div className="grid gap-3">
-          <div className="grid gap-2">
-            <Label htmlFor="cover_title" className="text-sm text-muted-foreground">
-              Cover title
-            </Label>
-            <Input
-              id="cover_title"
-              name="cover_title"
-              value={title}
-              onChange={(event) => setTitle(event.currentTarget.value)}
-              disabled={!isHost}
-              className="h-11 rounded-2xl bg-transparent"
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="cover_subtitle" className="text-sm text-muted-foreground">
-              Subtitle/date
-            </Label>
-            <Input
-              id="cover_subtitle"
-              name="cover_subtitle"
-              value={subtitle}
-              onChange={(event) => setSubtitle(event.currentTarget.value)}
-              disabled={!isHost}
-              className="h-11 rounded-2xl bg-transparent"
-            />
-          </div>
+            <div className="grid gap-2">
+              <Label htmlFor="cover_title" className={controlSubLabelClass}>
+                Cover title
+              </Label>
+              <Input
+                id="cover_title"
+                name="cover_title"
+                value={title}
+                onChange={(event) => setTitle(event.currentTarget.value)}
+                disabled={!isHost}
+                className={inspectorInputClass}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="cover_subtitle" className={controlSubLabelClass}>
+                Subtitle/date
+              </Label>
+              <Input
+                id="cover_subtitle"
+                name="cover_subtitle"
+                value={subtitle}
+                onChange={(event) => setSubtitle(event.currentTarget.value)}
+                disabled={!isHost}
+                className={inspectorInputClass}
+              />
+            </div>
           </div>
         </div>
 
         <div className={controlSectionClass}>
           <span className={cn(controlLabelClass, "flex items-center gap-2")}>
-            <Type className="size-4" />
-            Font
+            <Type className="size-3.5" />
+            Title style
           </span>
-          <div className="flex flex-wrap gap-2">
-            {fontOptions.map((option) => (
-              <Button
-                key={option.value}
-                type="button"
-                variant={font === option.value ? "default" : "outline"}
-                size="sm"
-                className={cn(pillClass, option.className)}
-                onClick={() => setFont(option.value)}
-                disabled={!isHost}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-
-        <div className={controlSectionClass}>
-          <span className={controlLabelClass}>Text color</span>
-          <div className="flex flex-wrap gap-2.5">
-            {colorOptions.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-label={option.label}
-                title={option.label}
-                className={cn(
-                  "grid size-9 place-items-center rounded-full border transition-all duration-200",
-                  color.toLowerCase() === option.value.toLowerCase()
-                    ? "border-foreground ring-2 ring-foreground/25"
-                    : "border-border hover:border-foreground/40",
-                )}
-                style={{ backgroundColor: option.value }}
-                onClick={() => setColor(option.value)}
-                disabled={!isHost}
-              >
-                {color.toLowerCase() === option.value.toLowerCase() ? (
-                  <Check
-                    className={cn(
-                      "size-4",
-                      option.value === "#050505" ? "text-white" : "text-black",
-                    )}
-                  />
-                ) : null}
-              </button>
-            ))}
-            <button
-              type="button"
-              aria-label="Custom color"
-              title="Custom"
-              className={cn(
-                "grid size-9 place-items-center rounded-full border bg-[conic-gradient(from_0deg,#ff4d4d,#ffc457,#9ff3d4,#32dcdc,#8fd3ff,#b9a7ff,#ff4d4d)] transition-all duration-200",
-                isCustomColor
-                  ? "border-foreground ring-2 ring-foreground/25"
-                  : "border-border hover:border-foreground/40",
+          <div className="grid gap-4">
+            <div className="grid gap-2.5">
+              <span className={controlSubLabelClass}>Title font</span>
+              {renderFontControls(titleText.font, (nextFont) =>
+                setTitleText((current) => ({ ...current, font: nextFont })),
               )}
-              onClick={() => colorInputRef.current?.click()}
-              disabled={!isHost}
-            >
-              {isCustomColor ? <Check className="size-4 text-black" /> : null}
-            </button>
-            <input
-              ref={colorInputRef}
-              type="color"
-              value={customColor}
-              className="sr-only"
-              onChange={(event) => {
-                setCustomColor(event.currentTarget.value);
-                setColor(event.currentTarget.value);
-              }}
-              disabled={!isHost}
-              aria-label="Choose custom text color"
-            />
+            </div>
+            <div className="grid gap-2.5">
+              <span className={controlSubLabelClass}>Title color</span>
+              {renderColorControls({
+                value: titleText.color,
+                customValue: titleCustomColor,
+                isCustom: isCustomTitleColor,
+                inputRef: titleColorInputRef,
+                onCustomValueChange: setTitleCustomColor,
+                onChange: (nextColor) =>
+                  setTitleText((current) => ({ ...current, color: nextColor })),
+                ariaLabel: "Choose custom title color",
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground/75">Drag title on canvas.</p>
           </div>
         </div>
 
         <div className={controlSectionClass}>
-          <span className={controlLabelClass}>Position</span>
-          <div className="rounded-2xl border bg-muted/20 p-3">
-            <p className="text-sm leading-6 text-muted-foreground">
-              Drag the title to move it. Pull corners to resize, or side handles to change width.
+          <span className={controlLabelClass}>Date style</span>
+          <div className="grid gap-4">
+            <div className="grid gap-2.5">
+              <span className={controlSubLabelClass}>Date font</span>
+              {renderFontControls(subtitleText.font, (nextFont) =>
+                setSubtitleText((current) => ({ ...current, font: nextFont })),
+              )}
+            </div>
+            <div className="grid gap-2.5">
+              <span className={controlSubLabelClass}>Date color</span>
+              {renderColorControls({
+                value: subtitleText.color,
+                customValue: subtitleCustomColor,
+                isCustom: isCustomSubtitleColor,
+                inputRef: subtitleColorInputRef,
+                onCustomValueChange: setSubtitleCustomColor,
+                onChange: (nextColor) =>
+                  setSubtitleText((current) => ({ ...current, color: nextColor })),
+                ariaLabel: "Choose custom date color",
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground/75">Drag date on canvas.</p>
+          </div>
+        </div>
+
+        <div className={controlSectionClass}>
+          <span className={controlLabelClass}>Placement</span>
+          <div className="flex flex-col gap-3 rounded-2xl border border-border/30 bg-background/45 px-3.5 py-3 dark:border-white/[0.06] dark:bg-white/[0.03]">
+            <p className="text-sm leading-6 text-muted-foreground/90">
+              Select text on the cover. Drag to move, pull corners to resize, side handles stretch width.
             </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3 rounded-full"
-              disabled={!isHost}
-              onClick={() => {
-                setTextPosition(positionCoordinates.center);
-                setTextScale(1);
-                setTextBoxWidth(defaultTextBoxWidth);
-                setIsTextSelected(true);
-              }}
-            >
-              Reset text
-            </Button>
-          </div>
-        </div>
-
-        <div className={controlSectionClass}>
-          <span className={controlLabelClass}>Cover photo</span>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {photos.map((photo) => (
-              <button
-                key={photo.id}
-                type="button"
-                className={cn(
-                  "relative h-20 w-16 shrink-0 overflow-hidden rounded-xl border bg-muted transition-all duration-200 hover:border-foreground/40",
-                  coverPhotoId === photo.id ? "ring-2 ring-ring" : "",
-                )}
-                onClick={() => setCoverPhotoId(photo.id)}
-                disabled={!isHost}
-              >
-                {photo.thumbnail_public_url ? (
-                  <Image
-                    src={photo.thumbnail_public_url}
-                    alt={photo.original_file_name}
-                    fill
-                    sizes="64px"
-                    className="object-cover"
-                    crossOrigin="anonymous"
-                    unoptimized
-                  />
-                ) : null}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className={controlSectionClass}>
-          <span className={controlLabelClass}>Mood/filter</span>
-          <div className="flex flex-wrap gap-2">
-            {overlayOptions.map((option) => (
+            <div className="flex flex-wrap gap-2">
               <Button
-                key={option.value}
                 type="button"
-                variant={overlay === option.value ? "default" : "outline"}
+                variant="outline"
                 size="sm"
-                className={pillClass}
-                onClick={() => setOverlay(option.value)}
+                className={cn(pillClass, "w-fit", idlePillClass)}
                 disabled={!isHost}
+                onClick={resetTitleText}
               >
-                {option.label}
+                Reset title
               </Button>
-            ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={cn(pillClass, "w-fit", idlePillClass)}
+                disabled={!isHost}
+                onClick={resetSubtitleText}
+              >
+                Reset date
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={cn(pillClass, "w-fit", idlePillClass)}
+                disabled={!isHost}
+                onClick={resetAllText}
+              >
+                Reset all text
+              </Button>
+            </div>
           </div>
         </div>
 
-        <Button
-          type="submit"
-          disabled={!isHost}
-          className="h-11 w-full rounded-full"
-        >
-          Save cover
-        </Button>
+        <div className={controlSectionClass}>
+          <span className={controlLabelClass}>Image</span>
+          <div className="grid gap-4">
+            <div className="grid gap-2.5">
+              <span className={controlSubLabelClass}>Cover photo</span>
+              <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {photos.map((photo) => (
+                  <button
+                    key={photo.id}
+                    type="button"
+                    className={cn(
+                      "relative h-24 w-[4.5rem] shrink-0 overflow-hidden rounded-2xl border border-border/50 bg-muted shadow-[0_8px_22px_rgb(0_0_0_/_0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/35 hover:shadow-[0_12px_30px_rgb(0_0_0_/_0.09)] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.09] dark:shadow-[0_8px_24px_rgb(0_0_0_/_0.24)]",
+                      coverPhotoId === photo.id
+                        ? "border-foreground ring-2 ring-foreground/25 ring-offset-2 ring-offset-background"
+                        : "",
+                    )}
+                    onClick={() => setCoverPhotoId(photo.id)}
+                    disabled={!isHost}
+                  >
+                    {photo.thumbnail_public_url ? (
+                      <Image
+                        src={photo.thumbnail_public_url}
+                        alt={photo.original_file_name}
+                        fill
+                        sizes="72px"
+                        className="object-cover transition-transform duration-300 hover:scale-105"
+                        crossOrigin="anonymous"
+                        unoptimized
+                      />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-2.5">
+              <span className={controlSubLabelClass}>Mood/filter</span>
+              <div className="flex flex-wrap gap-2">
+                {overlayOptions.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      pillClass,
+                      overlay === option.value ? selectedPillClass : idlePillClass,
+                    )}
+                    onClick={() => setOverlay(option.value)}
+                    disabled={!isHost}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={controlSectionClass}>
+          <span className={controlLabelClass}>Action</span>
+          <Button
+            type="submit"
+            disabled={!isHost}
+            className="h-12 w-full rounded-full border border-foreground bg-foreground text-background shadow-[0_14px_34px_rgb(0_0_0_/_0.12)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-foreground/90 hover:shadow-[0_18px_42px_rgb(0_0_0_/_0.16)] active:translate-y-0 active:scale-[0.99] disabled:translate-y-0 disabled:scale-100 disabled:shadow-none dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
+          >
+            Save cover
+          </Button>
+        </div>
       </form>
     </section>
   );
