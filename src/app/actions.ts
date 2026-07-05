@@ -1030,6 +1030,12 @@ export async function uploadPhotosAction(
     .getAll("original_file_names")
     .map((value) => (typeof value === "string" ? value.trim() : ""));
 
+  logUploadEvent("[upload-attempt]", {
+    roomId,
+    userId: user.id,
+    fileCount: files.length,
+  });
+
   if (files.length === 0) {
     getUploadErrorRedirect(roomId, "no-files");
   }
@@ -1129,6 +1135,9 @@ export async function uploadPhotosAction(
       extension,
     });
 
+    logUploadEvent("[upload-storage-key]", storageKey);
+    logUploadEvent("[upload-thumbnail-key]", thumbnailStorageKey);
+
     try {
       await r2.send(
         new PutObjectCommand({
@@ -1180,7 +1189,11 @@ export async function uploadPhotosAction(
 
   revalidatePath(`/rooms/${roomId}`);
   revalidatePath("/dashboard");
-  redirect(`/rooms/${roomId}?upload=success&count=${rows.length}`);
+
+  return {
+    success: true,
+    count: rows.length,
+  };
 }
 
 export async function togglePhotoFavoriteAction(formData: FormData) {

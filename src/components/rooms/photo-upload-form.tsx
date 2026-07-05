@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, ImageIcon, Loader2, UploadCloud } from "lucide-react";
 import { uploadPhotosAction } from "@/app/actions";
@@ -195,15 +195,30 @@ export function PhotoUploadForm({
   const router = useRouter();
   const [items, setItems] = useState<UploadItem[]>([]);
   const [clientError, setClientError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isUploading, setIsUploading] = useState(false);
+  const [localSuccessCount, setLocalSuccessCount] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const uploadedCount = Number(uploadCount ?? 0);
+  const successCount =
+    localSuccessCount ??
+    (uploadStatus === "success" && items.length === 0 ? uploadedCount : null);
 
   function updateItem(id: string, patch: Partial<UploadItem>) {
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
     );
   }
+
+  const clearUploadQueue = useCallback(() => {
+    setItems((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      return [];
+    });
+
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+  }, []);
 
   function failUploadingItems(detail: string) {
     setItems((current) =>
@@ -220,21 +235,14 @@ export function PhotoUploadForm({
   }
 
   useEffect(() => {
-    if (isPending || (uploadStatus !== "success" && uploadStatus !== "error")) {
+    if (isUploading || (uploadStatus !== "success" && uploadStatus !== "error")) {
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
       if (uploadStatus === "success") {
-        setItems((current) => {
-          current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
-          return [];
-        });
+        clearUploadQueue();
         setClientError(null);
-
-        if (inputRef.current) {
-          inputRef.current.value = "";
-        }
 
         router.refresh();
         return;
@@ -256,10 +264,18 @@ export function PhotoUploadForm({
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [isPending, missingConfigKey, router, uploadMessage, uploadStatus]);
+  }, [
+    clearUploadQueue,
+    isUploading,
+    missingConfigKey,
+    router,
+    uploadMessage,
+    uploadStatus,
+  ]);
 
   function handleFiles(files: FileList | null) {
     setClientError(null);
+    setLocalSuccessCount(null);
     items.forEach((item) => URL.revokeObjectURL(item.previewUrl));
 
     const nextItems = Array.from(files ?? []).map((file) => ({
@@ -291,6 +307,9 @@ export function PhotoUploadForm({
       setClientError("Upload up to 12 photos at a time.");
       return;
     }
+
+    setIsUploading(true);
+    setLocalSuccessCount(null);
 
     const formData = new FormData();
     formData.append("room_id", roomId);
@@ -344,56 +363,45 @@ export function PhotoUploadForm({
 
       logUploadClient("[upload-start]", { roomId, fileCount: items.length });
 
-      startTransition(() => {
-        void (async () => {
-          try {
-            const result = await uploadPhotosAction(formData);
+      const result = await uploadPhotosAction(formData);
 
-            logUploadClient("[upload-result]", result ?? null);
+      logUploadClient("[upload-result]", result ?? null);
 
-            if (result?.success === false) {
-              setClientError(result.error);
-              failUploadingItems("Upload failed");
-              return;
-            }
+      if (result?.success === false) {
+        setClientError(result.error);
+        failUploadingItems("Upload failed");
+        return;
+      }
 
-            if (result?.success === true) {
-              setItems((current) => {
-                current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
-                return [];
-              });
-
-              if (inputRef.current) {
-                inputRef.current.value = "";
-              }
-
-              router.refresh();
-            }
-          } catch (error) {
-            if (isNextRedirectError(error)) {
-              throw error;
-            }
-
-            logUploadClientError("[upload-error]", error);
-            setClientError("We could not upload your photos. Try again.");
-            failUploadingItems("Upload failed");
-          }
-        })();
-      });
+      if (result?.success === true) {
+        clearUploadQueue();
+        setClientError(null);
+        setLocalSuccessCount(result.count);
+        router.refresh();
+      }
     } catch (error) {
-      console.error("Unable to optimize photos", error);
+      if (isNextRedirectError(error)) {
+        throw error;
+      }
+
+      console.error("Unable to upload photos", error);
+      logUploadClientError("[upload-error]", error);
       setClientError(
         error instanceof Error
           ? error.message
-          : "We could not optimize those images.",
+          : "We could not upload your photos. Try again.",
       );
       setItems((current) =>
         current.map((item) =>
           item.status === "compressing"
             ? { ...item, status: "error", detail: "Optimization failed" }
+            : item.status === "uploading"
+              ? { ...item, status: "error", detail: "Upload failed" }
             : item,
         ),
       );
+    } finally {
+      setIsUploading(false);
     }
   }
 
@@ -406,10 +414,10 @@ export function PhotoUploadForm({
         </p>
       </div>
       <div className="grid gap-4">
-        {uploadStatus === "success" ? (
+        {successCount !== null ? (
           <div className="rounded-md border border-[color-mix(in_oklch,var(--accent),var(--foreground)_10%)] bg-accent/60 px-4 py-3 text-sm text-accent-foreground">
-            {uploadedCount > 1
-              ? `${uploadedCount} photos uploaded.`
+            {successCount > 1
+              ? `${successCount} photos uploaded.`
               : "Photo uploaded."}
           </div>
         ) : null}
@@ -511,15 +519,15 @@ export function PhotoUploadForm({
 
           <Button
             type="submit"
-            disabled={isPending || items.some((item) => item.status === "uploading")}
+            disabled={isUploading || items.some((item) => item.status === "uploading")}
             className="h-12 w-full rounded-full border border-black/10 bg-foreground px-6 text-background shadow-[inset_0_1px_0_rgb(255_255_255_/_0.22),0_10px_30px_rgb(0_0_0_/_0.10)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-foreground hover:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.28),0_16px_42px_rgb(0_0_0_/_0.14)] active:translate-y-0 active:scale-[0.985] sm:w-fit dark:border-white/20 dark:bg-[#f7efe0] dark:text-black dark:hover:bg-[#f7efe0]"
           >
-            {isPending ? (
+            {isUploading ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <UploadCloud className="size-4" />
             )}
-            {isPending ? "Uploading..." : "Optimize and upload"}
+            {isUploading ? "Uploading..." : "Optimize and upload"}
           </Button>
         </form>
       </div>
