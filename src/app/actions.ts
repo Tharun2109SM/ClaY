@@ -332,12 +332,22 @@ function getUploadFailure(error: string, code: string): UploadActionResult {
 
 function getErrorLogDetails(error: unknown) {
   if (error instanceof Error) {
-    const errorWithCode = error as Error & { code?: unknown; Code?: unknown };
+    const errorWithCode = error as Error & {
+      code?: unknown;
+      Code?: unknown;
+      $metadata?: {
+        httpStatusCode?: unknown;
+      };
+    };
 
     return {
       name: error.name,
       message: error.message,
       code: errorWithCode.Code ?? errorWithCode.code ?? null,
+      statusCode:
+        typeof errorWithCode.$metadata?.httpStatusCode === "number"
+          ? errorWithCode.$metadata.httpStatusCode
+          : null,
     };
   }
 
@@ -347,6 +357,9 @@ function getErrorLogDetails(error: unknown) {
       name?: unknown;
       code?: unknown;
       Code?: unknown;
+      $metadata?: {
+        httpStatusCode?: unknown;
+      };
     };
 
     return {
@@ -356,6 +369,10 @@ function getErrorLogDetails(error: unknown) {
           ? errorRecord.message
           : String(error),
       code: errorRecord.Code ?? errorRecord.code ?? null,
+      statusCode:
+        typeof errorRecord.$metadata?.httpStatusCode === "number"
+          ? errorRecord.$metadata.httpStatusCode
+          : null,
     };
   }
 
@@ -363,6 +380,7 @@ function getErrorLogDetails(error: unknown) {
     message: String(error),
     name: null,
     code: null,
+    statusCode: null,
   };
 }
 
@@ -989,9 +1007,11 @@ export async function uploadPhotosAction(
       roomId,
       fileCount: files.length,
     });
-    logUploadEvent("[upload-env-check]", {
+    const uploadEnvironmentDebug = {
+      runtime: process.env.VERCEL ? "vercel" : "local",
+      nodeEnv: process.env.NODE_ENV,
       hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
-      hasAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+      hasSupabaseAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
       hasR2AccountId: Boolean(getR2Env("CLOUDFLARE_R2_ACCOUNT_ID")),
       hasR2AccessKeyId: Boolean(getR2Env("CLOUDFLARE_R2_ACCESS_KEY_ID")),
       hasR2SecretAccessKey: Boolean(
@@ -999,7 +1019,10 @@ export async function uploadPhotosAction(
       ),
       hasR2BucketName: Boolean(getR2Env("CLOUDFLARE_R2_BUCKET_NAME")),
       hasR2PublicBaseUrl: Boolean(getR2Env("CLOUDFLARE_R2_PUBLIC_BASE_URL")),
-    });
+    };
+
+    logUploadEvent("[upload-prod-debug]", uploadEnvironmentDebug);
+    logUploadEvent("[upload-env-check]", uploadEnvironmentDebug);
 
     if (!roomId) {
       return getUploadFailure("Missing room id for upload.", "missing_room_id");
@@ -1017,7 +1040,7 @@ export async function uploadPhotosAction(
 
       logUploadEvent("[upload-missing-env]", missingEnv);
 
-      return getUploadFailure(message, "missing_upload_env");
+      return getUploadFailure(message, "missing_upload_config");
     }
 
     const supabase = await createSupabaseServerClient();
@@ -1107,14 +1130,17 @@ export async function uploadPhotosAction(
       r2 = getR2Client();
       bucket = getR2BucketName();
     } catch (error) {
-      logUploadEvent("[upload-r2-put-error]", getErrorLogDetails(error));
+      const errorDetails = getErrorLogDetails(error);
+
+      logUploadEvent("[upload-r2-error]", errorDetails);
+      logUploadEvent("[upload-r2-put-error]", errorDetails);
       return getUploadFailure(
         "Upload failed. Check production upload configuration.",
-        "storage_config_failed",
+        "missing_upload_config",
       );
     }
 
-    logUploadEvent("[upload-r2-start]", { bucket });
+    logUploadEvent("[upload-r2-config]", { bucketName: bucket });
 
     const insertPayload = [];
 
@@ -1187,7 +1213,15 @@ export async function uploadPhotosAction(
 
       logUploadEvent("[upload-storage-key]", storageKey);
       logUploadEvent("[upload-thumbnail-key]", thumbnailStorageKey);
+      logUploadEvent("[upload-r2-start]", {
+        bucketName: bucket,
+        storageKey,
+        thumbnailStorageKey,
+        contentType: file.type,
+        fileSize: file.size,
+      });
       logUploadEvent("[upload-r2-put-start]", {
+        bucketName: bucket,
         storageKey,
         thumbnailStorageKey,
         contentType: file.type,
@@ -1212,8 +1246,11 @@ export async function uploadPhotosAction(
           }),
         );
       } catch (error) {
-        console.error("Unable to upload photo to R2", error);
-        logUploadEvent("[upload-r2-put-error]", getErrorLogDetails(error));
+        const errorDetails = getErrorLogDetails(error);
+
+        console.error("Unable to upload photo to R2", errorDetails);
+        logUploadEvent("[upload-r2-error]", errorDetails);
+        logUploadEvent("[upload-r2-put-error]", errorDetails);
         return getUploadFailure(
           "We could not upload your photo to storage. Try again.",
           "r2_upload_failed",
@@ -1239,6 +1276,7 @@ export async function uploadPhotosAction(
       });
     }
 
+    logUploadEvent("[upload-db-payload]", insertPayload);
     logUploadEvent("[upload-db-insert-payload]", insertPayload);
 
     const { data, error } = await supabase
@@ -1252,8 +1290,10 @@ export async function uploadPhotosAction(
     });
 
     if (error) {
+      logUploadEvent("[upload-db-error]", toSupabaseIssue(error));
+
       return getUploadFailure(
-        error.message || "We could not save your photo.",
+        "The files uploaded, but the photo metadata could not be saved.",
         "db_insert_failed",
       );
     }

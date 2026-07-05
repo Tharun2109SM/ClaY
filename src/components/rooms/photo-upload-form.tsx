@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, ImageIcon, Loader2, UploadCloud } from "lucide-react";
-import { uploadPhotosAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -57,6 +56,18 @@ type OptimizedImage = {
   height: number;
 };
 
+type UploadApiResult =
+  | {
+      success: true;
+      count: number;
+      photos?: { id: string }[];
+    }
+  | {
+      success: false;
+      error: string;
+      code: string;
+    };
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -66,15 +77,95 @@ function formatBytes(bytes: number) {
 }
 
 function logUploadClient(label: string, value: unknown) {
-  if (process.env.NODE_ENV !== "production") {
-    console.log(label, value);
-  }
+  console.log(label, value);
 }
 
 function logUploadClientError(label: string, value: unknown) {
-  if (process.env.NODE_ENV !== "production") {
-    console.error(label, value);
+  console.error(label, value);
+}
+
+function getClientUploadErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "We could not upload your photos. Try again.";
   }
+
+  const message = error.message;
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("413") ||
+    lowerMessage.includes("payload too large") ||
+    lowerMessage.includes("body exceeded") ||
+    lowerMessage.includes("request body") ||
+    lowerMessage.includes("too large")
+  ) {
+    return "Upload failed before reaching ClaY. Try a smaller photo first.";
+  }
+
+  if (lowerMessage.includes("failed to fetch")) {
+    return "Upload failed before reaching ClaY. Check production upload logs.";
+  }
+
+  return message || "We could not upload your photos. Try again.";
+}
+
+function isUploadApiResult(value: unknown): value is UploadApiResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<UploadApiResult>;
+
+  if (result.success === true) {
+    return typeof result.count === "number";
+  }
+
+  return (
+    result.success === false &&
+    typeof result.error === "string" &&
+    typeof result.code === "string"
+  );
+}
+
+async function uploadPhotosWithApi(roomId: string, formData: FormData) {
+  const response = await fetch(`/api/rooms/${roomId}/photos/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  const text = await response.text();
+  let result: unknown;
+
+  try {
+    result = JSON.parse(text);
+  } catch {
+    console.error("[upload-non-json-response]", text.slice(0, 500));
+
+    return {
+      success: false,
+      error: "Upload failed. The server returned an invalid response.",
+      code: "non_json_response",
+    } satisfies UploadApiResult;
+  }
+
+  if (!isUploadApiResult(result)) {
+    console.error("[upload-invalid-json-response]", result);
+
+    return {
+      success: false,
+      error: "Upload failed. The server returned an unexpected response.",
+      code: "invalid_json_response",
+    } satisfies UploadApiResult;
+  }
+
+  if (!response.ok && result.success !== false) {
+    return {
+      success: false,
+      error: `Upload failed with status ${response.status}.`,
+      code: "http_upload_failed",
+    } satisfies UploadApiResult;
+  }
+
+  return result;
 }
 
 function getBaseName(fileName: string) {
@@ -355,9 +446,17 @@ export function PhotoUploadForm({
         roomId,
         fileCount: items.length,
         fileNames: items.map((item) => item.file.name),
+        optimizedFileSizes: formData
+          .getAll("photos")
+          .filter((file): file is File => file instanceof File)
+          .map((file) => file.size),
+        thumbnailFileSizes: formData
+          .getAll("thumbnails")
+          .filter((file): file is File => file instanceof File)
+          .map((file) => file.size),
       });
 
-      const result = await uploadPhotosAction(formData);
+      const result = await uploadPhotosWithApi(roomId, formData);
 
       logUploadClient("[upload-client-result]", result ?? null);
 
@@ -376,11 +475,7 @@ export function PhotoUploadForm({
     } catch (error) {
       console.error("Unable to upload photos", error);
       logUploadClientError("[upload-client-catch]", error);
-      setClientError(
-        error instanceof Error
-          ? error.message
-          : "We could not upload your photos. Try again.",
-      );
+      setClientError(getClientUploadErrorMessage(error));
       setItems((current) =>
         current.map((item) =>
           item.status === "compressing"
