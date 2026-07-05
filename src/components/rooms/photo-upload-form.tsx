@@ -56,17 +56,51 @@ type OptimizedImage = {
   height: number;
 };
 
-type UploadApiResult =
+type UploadApiFailure = {
+  success: false;
+  error: string;
+  code: string;
+};
+
+type PresignedUpload = {
+  photoId: string;
+  storageKey: string;
+  thumbnailStorageKey: string;
+  uploadUrl: string;
+  thumbnailUploadUrl: string;
+};
+
+type UploadMetadata = {
+  originalFileName: string;
+  contentType: "image/webp";
+  thumbnailContentType: "image/webp";
+  fileSize: number;
+  thumbnailFileSize: number;
+  width: number;
+  height: number;
+  thumbnailWidth: number;
+  thumbnailHeight: number;
+};
+
+type PreparedUpload = UploadMetadata & {
+  itemId: string;
+  optimized: OptimizedImage;
+  thumbnail: OptimizedImage;
+};
+
+type PresignApiResult =
+  | {
+      success: true;
+      uploads: PresignedUpload[];
+    }
+  | UploadApiFailure;
+
+type FinalizeApiResult =
   | {
       success: true;
       count: number;
-      photos?: { id: string }[];
     }
-  | {
-      success: false;
-      error: string;
-      code: string;
-    };
+  | UploadApiFailure;
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) {
@@ -109,16 +143,12 @@ function getClientUploadErrorMessage(error: unknown) {
   return message || "We could not upload your photos. Try again.";
 }
 
-function isUploadApiResult(value: unknown): value is UploadApiResult {
+function isUploadApiFailure(value: unknown): value is UploadApiFailure {
   if (!value || typeof value !== "object") {
     return false;
   }
 
-  const result = value as Partial<UploadApiResult>;
-
-  if (result.success === true) {
-    return typeof result.count === "number";
-  }
+  const result = value as Partial<UploadApiFailure>;
 
   return (
     result.success === false &&
@@ -127,45 +157,163 @@ function isUploadApiResult(value: unknown): value is UploadApiResult {
   );
 }
 
-async function uploadPhotosWithApi(roomId: string, formData: FormData) {
-  const response = await fetch(`/api/rooms/${roomId}/photos/upload`, {
-    method: "POST",
-    body: formData,
-  });
+function isPresignApiResult(value: unknown): value is PresignApiResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<PresignApiResult>;
+
+  if (result.success === true) {
+    const uploads = (result as { uploads?: unknown }).uploads;
+
+    return (
+      Array.isArray(uploads) &&
+      uploads.every(
+        (upload) =>
+          upload &&
+          typeof upload === "object" &&
+          typeof (upload as Partial<PresignedUpload>).photoId === "string" &&
+          typeof (upload as Partial<PresignedUpload>).storageKey === "string" &&
+          typeof (upload as Partial<PresignedUpload>).thumbnailStorageKey ===
+            "string" &&
+          typeof (upload as Partial<PresignedUpload>).uploadUrl === "string" &&
+          typeof (upload as Partial<PresignedUpload>).thumbnailUploadUrl ===
+            "string",
+      )
+    );
+  }
+
+  return isUploadApiFailure(value);
+}
+
+function isFinalizeApiResult(value: unknown): value is FinalizeApiResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<FinalizeApiResult>;
+
+  if (result.success === true) {
+    return typeof result.count === "number";
+  }
+
+  return isUploadApiFailure(value);
+}
+
+async function readJsonResponse(
+  response: Response,
+  invalidResponseCode: string,
+): Promise<unknown> {
   const text = await response.text();
-  let result: unknown;
 
   try {
-    result = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     console.error("[upload-non-json-response]", text.slice(0, 500));
 
     return {
       success: false,
       error: "Upload failed. The server returned an invalid response.",
-      code: "non_json_response",
-    } satisfies UploadApiResult;
+      code: invalidResponseCode,
+    } satisfies UploadApiFailure;
   }
+}
 
-  if (!isUploadApiResult(result)) {
+async function requestPresignedUploads(
+  roomId: string,
+  files: UploadMetadata[],
+): Promise<PresignApiResult> {
+  const response = await fetch(`/api/rooms/${roomId}/photos/presign`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ files }),
+  });
+  const result = await readJsonResponse(response, "presign_non_json_response");
+
+  if (!isPresignApiResult(result)) {
     console.error("[upload-invalid-json-response]", result);
 
     return {
       success: false,
       error: "Upload failed. The server returned an unexpected response.",
-      code: "invalid_json_response",
-    } satisfies UploadApiResult;
+      code: "presign_invalid_json_response",
+    };
   }
 
   if (!response.ok && result.success !== false) {
     return {
       success: false,
       error: `Upload failed with status ${response.status}.`,
-      code: "http_upload_failed",
-    } satisfies UploadApiResult;
+      code: "presign_http_failed",
+    };
   }
 
   return result;
+}
+
+async function finalizeUploads(
+  roomId: string,
+  photos: Array<UploadMetadata & Pick<PresignedUpload, "photoId" | "storageKey" | "thumbnailStorageKey">>,
+): Promise<FinalizeApiResult> {
+  const response = await fetch(`/api/rooms/${roomId}/photos/finalize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ photos }),
+  });
+  const result = await readJsonResponse(response, "finalize_non_json_response");
+
+  if (!isFinalizeApiResult(result)) {
+    console.error("[upload-invalid-json-response]", result);
+
+    return {
+      success: false,
+      error: "Upload failed. The server returned an unexpected response.",
+      code: "finalize_invalid_json_response",
+    };
+  }
+
+  if (!response.ok && result.success !== false) {
+    return {
+      success: false,
+      error: `Upload failed with status ${response.status}.`,
+      code: "finalize_http_failed",
+    };
+  }
+
+  return result;
+}
+
+async function putBlobDirectlyToR2({
+  uploadUrl,
+  storageKey,
+  file,
+}: {
+  uploadUrl: string;
+  storageKey: string;
+  file: File;
+}) {
+  const response = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": file.type,
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    console.error("[direct-r2-upload-error]", {
+      storageKey,
+      status: response.status,
+      statusText: response.statusText,
+    });
+
+    throw new Error("We could not upload your photo to storage. Try again.");
+  }
 }
 
 function getBaseName(fileName: string) {
@@ -392,10 +540,9 @@ export function PhotoUploadForm({
     setIsUploading(true);
     setLocalSuccessCount(null);
 
-    const formData = new FormData();
-    formData.append("room_id", roomId);
-
     try {
+      const preparedUploads: PreparedUpload[] = [];
+
       for (const item of items) {
         updateItem(item.id, {
           status: "compressing",
@@ -429,47 +576,146 @@ export function PhotoUploadForm({
           thumbnailSize: thumbnail.file.size,
         });
 
-        formData.append("photos", optimized.file);
-        formData.append("thumbnails", thumbnail.file);
-        formData.append("original_file_names", item.file.name);
+        preparedUploads.push({
+          itemId: item.id,
+          originalFileName: item.file.name,
+          contentType: "image/webp",
+          thumbnailContentType: "image/webp",
+          fileSize: optimized.file.size,
+          thumbnailFileSize: thumbnail.file.size,
+          width: optimized.width,
+          height: optimized.height,
+          thumbnailWidth: thumbnail.width,
+          thumbnailHeight: thumbnail.height,
+          optimized,
+          thumbnail,
+        });
       }
 
       setItems((current) =>
         current.map((item) => ({
           ...item,
           status: "uploading",
-          detail: "Uploading to ClaY",
+          detail: "Preparing direct upload",
         })),
       );
 
       logUploadClient("[upload-client-start]", {
         roomId,
-        fileCount: items.length,
-        fileNames: items.map((item) => item.file.name),
-        optimizedFileSizes: formData
-          .getAll("photos")
-          .filter((file): file is File => file instanceof File)
-          .map((file) => file.size),
-        thumbnailFileSizes: formData
-          .getAll("thumbnails")
-          .filter((file): file is File => file instanceof File)
-          .map((file) => file.size),
+        fileCount: preparedUploads.length,
+        fileNames: preparedUploads.map((upload) => upload.originalFileName),
+        optimizedFileSizes: preparedUploads.map((upload) => upload.fileSize),
+        thumbnailFileSizes: preparedUploads.map(
+          (upload) => upload.thumbnailFileSize,
+        ),
       });
 
-      const result = await uploadPhotosWithApi(roomId, formData);
+      const presignResult = await requestPresignedUploads(
+        roomId,
+        preparedUploads.map(
+          ({
+            originalFileName,
+            contentType,
+            thumbnailContentType,
+            fileSize,
+            thumbnailFileSize,
+            width,
+            height,
+            thumbnailWidth,
+            thumbnailHeight,
+          }) => ({
+            originalFileName,
+            contentType,
+            thumbnailContentType,
+            fileSize,
+            thumbnailFileSize,
+            width,
+            height,
+            thumbnailWidth,
+            thumbnailHeight,
+          }),
+        ),
+      );
 
-      logUploadClient("[upload-client-result]", result ?? null);
+      logUploadClient("[upload-client-presign-result]", {
+        success: presignResult.success,
+        count:
+          presignResult.success === true
+            ? presignResult.uploads.length
+            : undefined,
+        code: presignResult.success === false ? presignResult.code : undefined,
+      });
 
-      if (result?.success === false) {
-        setClientError(result.error);
+      if (presignResult.success === false) {
+        setClientError(presignResult.error);
         failUploadingItems("Upload failed");
         return;
       }
 
-      if (result?.success === true) {
+      if (presignResult.uploads.length !== preparedUploads.length) {
+        setClientError("Upload failed. The server returned an unexpected response.");
+        failUploadingItems("Upload failed");
+        return;
+      }
+
+      for (const [index, upload] of preparedUploads.entries()) {
+        const presignedUpload = presignResult.uploads[index];
+
+        updateItem(upload.itemId, {
+          detail: "Uploading optimized photo",
+        });
+
+        await putBlobDirectlyToR2({
+          uploadUrl: presignedUpload.uploadUrl,
+          storageKey: presignedUpload.storageKey,
+          file: upload.optimized.file,
+        });
+
+        updateItem(upload.itemId, {
+          detail: "Uploading thumbnail",
+        });
+
+        await putBlobDirectlyToR2({
+          uploadUrl: presignedUpload.thumbnailUploadUrl,
+          storageKey: presignedUpload.thumbnailStorageKey,
+          file: upload.thumbnail.file,
+        });
+      }
+
+      const finalizeResult = await finalizeUploads(
+        roomId,
+        preparedUploads.map((upload, index) => {
+          const presignedUpload = presignResult.uploads[index];
+
+          return {
+            photoId: presignedUpload.photoId,
+            storageKey: presignedUpload.storageKey,
+            thumbnailStorageKey: presignedUpload.thumbnailStorageKey,
+            originalFileName: upload.originalFileName,
+            contentType: upload.contentType,
+            thumbnailContentType: upload.thumbnailContentType,
+            fileSize: upload.fileSize,
+            thumbnailFileSize: upload.thumbnailFileSize,
+            width: upload.width,
+            height: upload.height,
+            thumbnailWidth: upload.thumbnailWidth,
+            thumbnailHeight: upload.thumbnailHeight,
+          };
+        }),
+      );
+
+      logUploadClient("[upload-client-result]", finalizeResult ?? null);
+
+      if (finalizeResult.success === false) {
+        setClientError(finalizeResult.error);
+        failUploadingItems("Upload failed");
+        return;
+      }
+
+      if (finalizeResult.success === true) {
         clearUploadQueue();
         setClientError(null);
-        setLocalSuccessCount(result.count);
+        setLocalSuccessCount(finalizeResult.count);
         router.refresh();
       }
     } catch (error) {
