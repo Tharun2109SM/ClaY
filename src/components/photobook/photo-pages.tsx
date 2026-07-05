@@ -30,10 +30,12 @@ export function PhotoPages({ photos }: { photos: PhotoAsset[] }) {
   }
 
   return (
-    <section className="grid gap-6">
+    <section className="grid gap-6 rounded-[2rem] border border-border/35 bg-card/35 p-5 shadow-[0_18px_60px_rgb(0_0_0_/_0.04)] dark:border-white/[0.07] dark:bg-white/[0.02] dark:shadow-[0_20px_70px_rgb(0_0_0_/_0.24)]">
       <div>
-        <p className="text-sm font-medium text-muted-foreground">Generated pages</p>
-        <h2 className="mt-1 text-2xl font-semibold">Photo story</h2>
+        <p className="text-[0.68rem] uppercase tracking-[0.24em] text-muted-foreground/75">
+          Generated pages
+        </p>
+        <h2 className="mt-2 text-2xl font-light">Photo story</h2>
       </div>
       <div className="grid gap-6 md:grid-cols-2">
         {pages.map((pagePhotos, pageIndex) => (
@@ -41,11 +43,11 @@ export function PhotoPages({ photos }: { photos: PhotoAsset[] }) {
             key={pagePhotos.map((photo) => photo.id).join("-")}
             data-photobook-page="true"
             data-photobook-page-label={`photo page ${pageIndex + 1}`}
-            className="aspect-[4/5] min-h-0 overflow-hidden rounded-lg border border-black/[0.10] bg-card p-3 shadow-[0_12px_36px_rgb(0_0_0_/_0.08)] dark:border-white/[0.10] dark:shadow-[0_16px_46px_rgb(0_0_0_/_0.32)]"
+            className="aspect-[4/5] min-h-0 overflow-hidden rounded-[1.35rem] border border-black/[0.10] bg-card p-3 shadow-[0_18px_52px_rgb(0_0_0_/_0.10)] dark:border-white/[0.10] dark:shadow-[0_22px_70px_rgb(0_0_0_/_0.42)]"
           >
             <div className={`grid size-full gap-3 ${layoutClass(pagePhotos.length)}`}>
               {pagePhotos.map((photo) => (
-                <div key={photo.id} className="relative overflow-hidden rounded-md bg-muted">
+                <div key={photo.id} className="relative overflow-hidden rounded-2xl bg-muted">
                   {photo.thumbnail_public_url ? (
                     <Image
                       src={photo.thumbnail_public_url}

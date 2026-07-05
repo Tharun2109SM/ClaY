@@ -78,6 +78,19 @@ function logPhotobookCoverSaveIssue(stage: string, error: {
     hint: issue.hint,
     code: issue.code,
   });
+  console.error("[cover-save-error]", {
+    stage,
+    message: issue.message,
+    details: issue.details,
+    hint: issue.hint,
+    code: issue.code,
+  });
+}
+
+function logCoverSaveDebug(label: string, value: unknown) {
+  if (process.env.NODE_ENV !== "production") {
+    console.error(label, value);
+  }
 }
 
 function logCreateRoomStep(
@@ -1152,6 +1165,28 @@ export async function updatePhotobookCoverAction(formData: FormData) {
   const coverTextColor = getString(formData, "cover_text_color");
   const coverTextPosition = getString(formData, "cover_text_position");
   const coverOverlayStyle = getString(formData, "cover_overlay_style");
+  const coverSettingsRaw = getString(formData, "cover_settings");
+
+  if (coverSettingsRaw) {
+    try {
+      logCoverSaveDebug("[cover-save-server-input]", JSON.parse(coverSettingsRaw));
+    } catch (error) {
+      logCoverSaveDebug("[cover-save-server-error]", {
+        stage: "cover-settings-json-parse",
+        error,
+      });
+    }
+  } else {
+    logCoverSaveDebug("[cover-save-server-input]", {
+      cover_photo_id: coverPhotoId,
+      cover_title: coverTitle,
+      cover_subtitle: coverSubtitle,
+      cover_font: coverFont,
+      cover_text_color: coverTextColor,
+      cover_text_position: coverTextPosition,
+      cover_overlay_style: coverOverlayStyle,
+    });
+  }
 
   if (!roomId || !photobookId) {
     redirect("/dashboard");
@@ -1228,13 +1263,19 @@ export async function updatePhotobookCoverAction(formData: FormData) {
     .select("id")
     .maybeSingle();
 
+  logCoverSaveDebug("[cover-save-server-result]", {
+    operation: "update",
+    updatedDraft,
+    error: updateError,
+  });
+
   if (updateError) {
     logPhotobookCoverSaveIssue("draft-update", updateError);
     redirect(`/rooms/${roomId}/photobook?message=cover-update-failed`);
   }
 
   if (!updatedDraft) {
-    const { error: insertError } = await supabase
+    const { data: insertedDraft, error: insertError } = await supabase
       .from("photobook_drafts")
       .insert({
         room_id: roomId,
@@ -1245,11 +1286,34 @@ export async function updatePhotobookCoverAction(formData: FormData) {
       .select("id")
       .single();
 
+    logCoverSaveDebug("[cover-save-server-result]", {
+      operation: "insert",
+      insertedDraft,
+      error: insertError,
+    });
+
     if (insertError) {
       logPhotobookCoverSaveIssue("draft-create", insertError);
       redirect(`/rooms/${roomId}/photobook?message=cover-update-failed`);
     }
   }
+
+  const { data: savedRow, error: afterReadError } = await supabase
+    .from("photobook_drafts")
+    .select(
+      "id, room_id, cover_photo_id, cover_title, cover_subtitle, cover_font, cover_text_color, cover_text_position, cover_overlay_style, updated_at",
+    )
+    .eq("room_id", roomId)
+    .maybeSingle();
+
+  if (afterReadError) {
+    logCoverSaveDebug("[cover-save-server-error]", {
+      stage: "after-read",
+      error: afterReadError,
+    });
+  }
+
+  logCoverSaveDebug("[cover-save-after-read]", savedRow);
 
   revalidatePath(`/rooms/${roomId}/photobook`);
   redirect(`/rooms/${roomId}/photobook?message=cover-updated`);

@@ -14,6 +14,8 @@ import { updatePhotobookCoverAction } from "@/app/actions";
 import {
   EditableTextBox,
   type EditableTextGeometry,
+  type PhotobookTextObject,
+  type PhotobookTextObjectRole,
 } from "@/components/photobook/editable-text-box";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,15 +100,13 @@ type CoverTextCoordinates = {
   y: number;
 };
 
-type CoverEditableTextSettings = EditableTextGeometry & {
-  font: CoverFont;
-  color: string;
-};
+type CoverEditableTextSettings = PhotobookTextObject;
 
 type SavedCoverTextSettings = {
-  version?: 2;
+  version?: 3;
   titleText?: Partial<CoverEditableTextSettings>;
   subtitleText?: Partial<CoverEditableTextSettings>;
+  customTextObjects?: Partial<CoverEditableTextSettings>[];
 };
 
 type LegacySavedCoverTextSettings = CoverTextCoordinates & {
@@ -115,7 +115,7 @@ type LegacySavedCoverTextSettings = CoverTextCoordinates & {
 };
 
 const minTextScale = 0.35;
-const maxTextScale = 2.5;
+const maxTextScale = 2.8;
 const defaultTitleText: EditableTextGeometry = {
   x: 0.5,
   y: 0.45,
@@ -128,8 +128,14 @@ const defaultSubtitleText: EditableTextGeometry = {
   scale: 0.55,
   width: 0.45,
 };
-const minTextBoxWidth = 0.15;
-const maxTextBoxWidth = 0.95;
+const defaultCustomText: EditableTextGeometry = {
+  x: 0.5,
+  y: 0.68,
+  scale: 0.75,
+  width: 0.45,
+};
+const minTextBoxWidth = 0.12;
+const maxTextBoxWidth = 0.98;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -157,7 +163,7 @@ function isSavedCoverTextSettings(value: unknown): value is SavedCoverTextSettin
 
   const settings = value as Partial<SavedCoverTextSettings>;
 
-  return Boolean(settings.titleText || settings.subtitleText);
+  return Boolean(settings.titleText || settings.subtitleText || settings.customTextObjects);
 }
 
 function resolveTextColor(color: string) {
@@ -168,13 +174,16 @@ function getFontClass(font: CoverFont) {
   return fontOptions.find((option) => option.value === font)?.className ?? "font-serif";
 }
 
-function clampTextBoxWidth(width: number, x: number, scale: number) {
-  const maxWidthForPosition = Math.max(
-    minTextBoxWidth,
-    Math.min(maxTextBoxWidth, ((Math.min(x, 1 - x) - 0.02) * 2) / scale),
-  );
+function clampTextBoxWidth(width: number) {
+  return clamp(width, minTextBoxWidth, maxTextBoxWidth);
+}
 
-  return clamp(width, minTextBoxWidth, maxWidthForPosition);
+function createClientId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}`;
 }
 
 function normalizeTextSettings(
@@ -182,8 +191,12 @@ function normalizeTextSettings(
   fallbackGeometry: EditableTextGeometry,
   fallbackFont: CoverFont,
   fallbackColor: string,
+  fallbackText: string,
+  fallbackId: string,
+  fallbackRole: PhotobookTextObjectRole,
 ): CoverEditableTextSettings {
   const savedFont = value?.font;
+  const savedRole = value?.role;
   const scale =
     typeof value?.scale === "number" && Number.isFinite(value.scale)
       ? clamp(value.scale, minTextScale, maxTextScale)
@@ -194,6 +207,15 @@ function normalizeTextSettings(
       : fallbackGeometry.x;
 
   return {
+    id: typeof value?.id === "string" && value.id ? value.id : fallbackId,
+    text: typeof value?.text === "string" ? value.text : fallbackText,
+    role:
+      savedRole === "title" ||
+      savedRole === "subtitle" ||
+      savedRole === "name" ||
+      savedRole === "custom"
+        ? savedRole
+        : fallbackRole,
     x,
     y:
       typeof value?.y === "number" && Number.isFinite(value.y)
@@ -202,7 +224,7 @@ function normalizeTextSettings(
     scale,
     width:
       typeof value?.width === "number" && Number.isFinite(value.width)
-        ? clampTextBoxWidth(value.width, x, scale)
+        ? clampTextBoxWidth(value.width)
         : fallbackGeometry.width,
     font: fontOptions.some((option) => option.value === savedFont)
       ? (savedFont as CoverFont)
@@ -242,44 +264,60 @@ export function CoverCustomizer({
   const [coverPhotoId, setCoverPhotoId] = useState(
     photobook.cover_photo_id ?? photos[0]?.id ?? "",
   );
-  const [title, setTitle] = useState(photobook.cover_title);
-  const [subtitle, setSubtitle] = useState(photobook.cover_subtitle ?? "");
   const initialTextColor = resolveTextColor(photobook.cover_text_color);
   const [titleText, setTitleText] = useState<CoverEditableTextSettings>(
     normalizeTextSettings(
       {
         ...defaultTitleText,
+        id: "cover-title",
+        text: photobook.cover_title,
+        role: "title",
         font: photobook.cover_font,
         color: initialTextColor,
       },
       defaultTitleText,
       photobook.cover_font,
       initialTextColor,
+      photobook.cover_title,
+      "cover-title",
+      "title",
     ),
   );
   const [subtitleText, setSubtitleText] = useState<CoverEditableTextSettings>(
     normalizeTextSettings(
       {
         ...defaultSubtitleText,
+        id: "cover-subtitle",
+        text: photobook.cover_subtitle ?? "",
+        role: "subtitle",
         font: photobook.cover_font,
         color: initialTextColor,
       },
       defaultSubtitleText,
       photobook.cover_font,
       initialTextColor,
+      photobook.cover_subtitle ?? "",
+      "cover-subtitle",
+      "subtitle",
     ),
   );
+  const [customTextObjects, setCustomTextObjects] = useState<
+    CoverEditableTextSettings[]
+  >([]);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<CoverOverlayStyle>(
     photobook.cover_overlay_style,
   );
   const [titleCustomColor, setTitleCustomColor] = useState(initialTextColor);
   const [subtitleCustomColor, setSubtitleCustomColor] = useState(initialTextColor);
+  const [customTextCustomColor, setCustomTextCustomColor] =
+    useState(initialTextColor);
   const titleColorInputRef = useRef<HTMLInputElement>(null);
   const subtitleColorInputRef = useRef<HTMLInputElement>(null);
   const coverRef = useRef<HTMLDivElement>(null);
   const hasLoadedSavedPositionRef = useRef(false);
   const storageKey = `clay-cover-text-position:${photobook.id}`;
+  const customTextColorInputRef = useRef<HTMLInputElement>(null);
 
   const selectedPhoto = useMemo(
     () => photos.find((photo) => photo.id === coverPhotoId) ?? photos[0],
@@ -295,6 +333,16 @@ export function CoverCustomizer({
     !colorOptions.some(
       (option) => option.value.toLowerCase() === subtitleText.color.toLowerCase(),
     );
+  const selectedCustomText =
+    customTextObjects.find((textObject) => textObject.id === selectedTextId) ?? null;
+  const selectedCustomTextIsCustomColor =
+    Boolean(selectedCustomText?.color.startsWith("#")) &&
+    !colorOptions.some(
+      (option) =>
+        option.value.toLowerCase() === selectedCustomText?.color.toLowerCase(),
+    );
+  const title = titleText.text;
+  const subtitle = subtitleText.text;
 
   const controlSectionClass =
     "grid gap-4 border-b border-border/35 pb-6 last:border-b-0 last:pb-0 dark:border-white/[0.08]";
@@ -332,6 +380,53 @@ export function CoverCustomizer({
   function resetAllText() {
     resetTitleText();
     setSubtitleText((current) => ({ ...current, ...defaultSubtitleText }));
+    setCustomTextObjects((current) =>
+      current.map((textObject, index) => ({
+        ...textObject,
+        x: clamp(0.5 + ((index % 3) - 1) * 0.12, 0.16, 0.84),
+        y: clamp(0.68 + Math.floor(index / 3) * 0.08, 0.18, 0.9),
+        scale: defaultCustomText.scale,
+        width: defaultCustomText.width,
+      })),
+    );
+  }
+
+  function addCoverTextBox() {
+    const id = createClientId("cover-text");
+    const offset = customTextObjects.length;
+
+    setCustomTextObjects((current) => [
+      ...current,
+      {
+        ...defaultCustomText,
+        id,
+        text: "New text",
+        font: titleText.font,
+        color: titleText.color,
+        role: "custom",
+        x: clamp(0.5 + ((offset % 3) - 1) * 0.1, 0.16, 0.84),
+        y: clamp(0.68 + Math.floor(offset / 3) * 0.08, 0.18, 0.9),
+      },
+    ]);
+    setSelectedTextId(id);
+  }
+
+  function updateCustomTextObject(
+    id: string,
+    updater: (textObject: CoverEditableTextSettings) => CoverEditableTextSettings,
+  ) {
+    setCustomTextObjects((current) =>
+      current.map((textObject) =>
+        textObject.id === id ? updater(textObject) : textObject,
+      ),
+    );
+  }
+
+  function deleteCustomTextObject(id: string) {
+    setCustomTextObjects((current) =>
+      current.filter((textObject) => textObject.id !== id),
+    );
+    setSelectedTextId((current) => (current === id ? null : current));
   }
 
   function renderFontControls(
@@ -427,8 +522,10 @@ export function CoverCustomizer({
           value={customValue}
           className="sr-only"
           onChange={(event) => {
-            onCustomValueChange(event.currentTarget.value);
-            onChange(event.currentTarget.value);
+            const nextColor = event.currentTarget.value;
+
+            onCustomValueChange(nextColor);
+            onChange(nextColor);
           }}
           disabled={!isHost}
           aria-label={ariaLabel}
@@ -442,6 +539,7 @@ export function CoverCustomizer({
     const savedPosition = localStorage.getItem(storageKey);
     let nextTitleText: CoverEditableTextSettings | null = null;
     let nextSubtitleText: CoverEditableTextSettings | null = null;
+    let nextCustomTextObjects: CoverEditableTextSettings[] = [];
 
     if (savedPosition) {
       try {
@@ -453,13 +551,38 @@ export function CoverCustomizer({
             defaultTitleText,
             photobook.cover_font,
             initialTextColor,
+            photobook.cover_title,
+            "cover-title",
+            "title",
           );
           nextSubtitleText = normalizeTextSettings(
             parsedPosition.subtitleText,
             defaultSubtitleText,
             photobook.cover_font,
             initialTextColor,
+            photobook.cover_subtitle ?? "",
+            "cover-subtitle",
+            "subtitle",
           );
+          nextCustomTextObjects = Array.isArray(parsedPosition.customTextObjects)
+            ? parsedPosition.customTextObjects.map((textObject, index) =>
+                normalizeTextSettings(
+                  textObject,
+                  {
+                    ...defaultCustomText,
+                    x: clamp(0.5 + ((index % 3) - 1) * 0.1, 0.16, 0.84),
+                    y: clamp(0.68 + Math.floor(index / 3) * 0.08, 0.18, 0.9),
+                  },
+                  photobook.cover_font,
+                  initialTextColor,
+                  "New text",
+                  typeof textObject.id === "string"
+                    ? textObject.id
+                    : `cover-text-${index + 1}`,
+                  "custom",
+                ),
+              )
+            : [];
         } else if (isCoverTextCoordinates(parsedPosition)) {
           const savedSettings = parsedPosition as LegacySavedCoverTextSettings;
 
@@ -475,6 +598,9 @@ export function CoverCustomizer({
             defaultTitleText,
             photobook.cover_font,
             initialTextColor,
+            photobook.cover_title,
+            "cover-title",
+            "title",
           );
           nextSubtitleText = normalizeTextSettings(
             {
@@ -488,6 +614,9 @@ export function CoverCustomizer({
             defaultSubtitleText,
             photobook.cover_font,
             initialTextColor,
+            photobook.cover_subtitle ?? "",
+            "cover-subtitle",
+            "subtitle",
           );
         }
       } catch {
@@ -506,9 +635,16 @@ export function CoverCustomizer({
         setSubtitleCustomColor(nextSubtitleText.color);
       }
 
+      setCustomTextObjects(nextCustomTextObjects);
       hasLoadedSavedPositionRef.current = true;
     });
-  }, [initialTextColor, photobook.cover_font, storageKey]);
+  }, [
+    initialTextColor,
+    photobook.cover_font,
+    photobook.cover_subtitle,
+    photobook.cover_title,
+    storageKey,
+  ]);
 
   useEffect(() => {
     if (!isHost || !hasLoadedSavedPositionRef.current) {
@@ -518,23 +654,24 @@ export function CoverCustomizer({
     localStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 2,
+        version: 3,
         titleText,
         subtitleText,
+        customTextObjects,
       }),
     );
-  }, [isHost, storageKey, titleText, subtitleText]);
+  }, [isHost, storageKey, titleText, subtitleText, customTextObjects]);
 
   return (
-    <section className="flex flex-col gap-8 md:flex-row md:items-start md:gap-6 lg:gap-10">
-      <div className="grid min-h-[66vh] w-full min-w-0 place-items-center rounded-[2rem] border border-black/[0.08] bg-card/20 p-3 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.22)] dark:border-white/[0.07] dark:bg-white/[0.018] dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.04)] sm:p-4 md:flex-1 lg:p-5">
+    <section className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_420px] xl:items-start xl:gap-14">
+      <div className="grid min-h-[72vh] w-full min-w-0 place-items-center rounded-[2rem] border border-black/[0.08] bg-card/20 p-4 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.22)] dark:border-white/[0.07] dark:bg-white/[0.018] dark:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.04)] sm:p-5 xl:p-7">
         <div
           data-photobook-page="true"
           data-photobook-page-id="cover"
           data-photobook-page-label="cover page"
           data-photobook-page-order="1"
           ref={coverRef}
-          className="relative mx-auto aspect-[4/5] w-full max-w-[35rem] overflow-hidden rounded-[1.35rem] border border-black/[0.10] bg-muted shadow-[0_18px_52px_rgb(0_0_0_/_0.10)] dark:border-white/[0.10] dark:shadow-[0_22px_70px_rgb(0_0_0_/_0.46)]"
+          className="relative mx-auto aspect-[4/5] w-full max-w-[42rem] overflow-hidden rounded-[1.35rem] border border-black/[0.10] bg-muted shadow-[0_18px_52px_rgb(0_0_0_/_0.10)] dark:border-white/[0.10] dark:shadow-[0_22px_70px_rgb(0_0_0_/_0.46)]"
           onPointerDown={handleCoverPointerDown}
         >
           {selectedPhoto?.public_url ? (
@@ -575,12 +712,12 @@ export function CoverCustomizer({
           >
             <h2
               className={cn(
-                "w-full max-w-none whitespace-normal text-left text-4xl leading-none md:text-6xl",
+                "w-full max-w-none whitespace-pre-wrap text-left text-4xl leading-none md:text-6xl",
                 getFontClass(titleText.font),
               )}
               style={{ overflowWrap: "normal", wordBreak: "normal" }}
             >
-              {title || "ClaY. by tharun"}
+              {titleText.text || "ClaY. by tharun"}
             </h2>
           </EditableTextBox>
           {subtitle ? (
@@ -605,19 +742,56 @@ export function CoverCustomizer({
             >
               <p
                 className={cn(
-                  "text-sm font-medium uppercase leading-tight tracking-[0.22em] md:text-base",
+                  "w-full max-w-none whitespace-pre-wrap text-left text-sm font-medium uppercase leading-tight tracking-[0.22em] md:text-base",
                   getFontClass(subtitleText.font),
                 )}
+                style={{ overflowWrap: "normal", wordBreak: "normal" }}
               >
-                {subtitle}
+                {subtitleText.text}
               </p>
             </EditableTextBox>
           ) : null}
+          {customTextObjects.map((textObject) => (
+            <EditableTextBox
+              key={textObject.id}
+              id={textObject.id}
+              canvasRef={coverRef}
+              geometry={textObject}
+              selected={selectedTextId === textObject.id}
+              editable={isHost}
+              color={resolveTextColor(textObject.color)}
+              ariaLabel={`Drag ${textObject.text || "cover text"}`}
+              className="z-40 rounded-lg p-0"
+              chromeRadiusClassName="rounded-lg"
+              minScale={minTextScale}
+              maxScale={maxTextScale}
+              minWidth={minTextBoxWidth}
+              maxWidth={maxTextBoxWidth}
+              onGeometryChange={(geometry) =>
+                updateCustomTextObject(textObject.id, (current) => ({
+                  ...current,
+                  ...geometry,
+                }))
+              }
+              onSelect={setSelectedTextId}
+              onDelete={() => deleteCustomTextObject(textObject.id)}
+            >
+              <p
+                className={cn(
+                  "w-full max-w-none whitespace-pre-wrap text-left text-xl leading-tight md:text-2xl",
+                  getFontClass(textObject.font),
+                )}
+                style={{ overflowWrap: "normal", wordBreak: "normal" }}
+              >
+                {textObject.text}
+              </p>
+            </EditableTextBox>
+          ))}
         </div>
       </div>
       <form
         action={updatePhotobookCoverAction}
-        className="grid w-full gap-6 rounded-[2rem] border border-border/45 bg-card/90 p-5 shadow-[0_22px_70px_rgb(0_0_0_/_0.055)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-[#050505]/92 dark:shadow-[0_24px_80px_rgb(0_0_0_/_0.34)] sm:p-6 md:sticky md:top-28 md:w-[360px] md:max-w-[360px] md:shrink-0 lg:w-[420px] lg:max-w-[420px]"
+        className="grid w-full gap-6 rounded-[2rem] border border-border/45 bg-card/90 p-5 shadow-[0_22px_70px_rgb(0_0_0_/_0.055)] backdrop-blur-xl [scrollbar-width:none] dark:border-white/[0.09] dark:bg-[#050505]/92 dark:shadow-[0_24px_80px_rgb(0_0_0_/_0.34)] sm:p-6 xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)] xl:w-[420px] xl:max-w-[420px] xl:shrink-0 xl:overflow-y-auto [&::-webkit-scrollbar]:hidden"
       >
         <input type="hidden" name="room_id" value={roomId} />
         <input type="hidden" name="photobook_id" value={photobook.id} />
@@ -638,7 +812,14 @@ export function CoverCustomizer({
                 id="cover_title"
                 name="cover_title"
                 value={title}
-                onChange={(event) => setTitle(event.currentTarget.value)}
+                onChange={(event) => {
+                  const nextText = event.currentTarget.value;
+
+                  setTitleText((current) => ({
+                    ...current,
+                    text: nextText,
+                  }));
+                }}
                 disabled={!isHost}
                 className={inspectorInputClass}
               />
@@ -651,7 +832,14 @@ export function CoverCustomizer({
                 id="cover_subtitle"
                 name="cover_subtitle"
                 value={subtitle}
-                onChange={(event) => setSubtitle(event.currentTarget.value)}
+                onChange={(event) => {
+                  const nextText = event.currentTarget.value;
+
+                  setSubtitleText((current) => ({
+                    ...current,
+                    text: nextText,
+                  }));
+                }}
                 disabled={!isHost}
                 className={inspectorInputClass}
               />
@@ -711,6 +899,90 @@ export function CoverCustomizer({
               })}
             </div>
             <p className="text-xs text-muted-foreground/75">Drag date on canvas.</p>
+          </div>
+        </div>
+
+        <div className={controlSectionClass}>
+          <span className={controlLabelClass}>Text boxes</span>
+          <div className="grid gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              className={cn(pillClass, "h-10 w-fit px-4", idlePillClass)}
+              disabled={!isHost}
+              onClick={addCoverTextBox}
+            >
+              + Add text box
+            </Button>
+            {selectedCustomText ? (
+              <div className="grid gap-4 rounded-2xl border border-border/30 bg-background/45 p-3.5 dark:border-white/[0.06] dark:bg-white/[0.03]">
+                <div className="grid gap-2">
+                  <Label
+                    htmlFor="cover_custom_text"
+                    className={controlSubLabelClass}
+                  >
+                    Selected text
+                  </Label>
+                  <Input
+                    id="cover_custom_text"
+                    value={selectedCustomText.text}
+                    onChange={(event) => {
+                      const nextText = event.currentTarget.value;
+
+                      updateCustomTextObject(selectedCustomText.id, (current) => ({
+                        ...current,
+                        text: nextText,
+                      }));
+                    }}
+                    disabled={!isHost}
+                    className={inspectorInputClass}
+                  />
+                </div>
+                <div className="grid gap-2.5">
+                  <span className={controlSubLabelClass}>Font</span>
+                  {renderFontControls(selectedCustomText.font, (nextFont) =>
+                    updateCustomTextObject(selectedCustomText.id, (current) => ({
+                      ...current,
+                      font: nextFont,
+                    })),
+                  )}
+                </div>
+                <div className="grid gap-2.5">
+                  <span className={controlSubLabelClass}>Color</span>
+                  {renderColorControls({
+                    value: selectedCustomText.color,
+                    customValue: customTextCustomColor,
+                    isCustom: selectedCustomTextIsCustomColor,
+                    inputRef: customTextColorInputRef,
+                    onCustomValueChange: setCustomTextCustomColor,
+                    onChange: (nextColor) =>
+                      updateCustomTextObject(selectedCustomText.id, (current) => ({
+                        ...current,
+                        color: nextColor,
+                      })),
+                    ariaLabel: "Choose custom text color",
+                  })}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    pillClass,
+                    "w-fit border-red-500/25 text-red-500 hover:border-red-500/45 hover:bg-red-500/10",
+                  )}
+                  disabled={!isHost}
+                  onClick={() => deleteCustomTextObject(selectedCustomText.id)}
+                >
+                  Delete text box
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs leading-5 text-muted-foreground/75">
+                Add a text box, then select it on the cover to edit its words,
+                font, and color.
+              </p>
+            )}
           </div>
         </div>
 

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { X } from "lucide-react";
+import type { CoverFont } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export type EditableTextGeometry = {
@@ -15,6 +16,16 @@ export type EditableTextGeometry = {
   y: number;
   scale: number;
   width: number;
+};
+
+export type PhotobookTextObjectRole = "title" | "subtitle" | "name" | "custom";
+
+export type PhotobookTextObject = EditableTextGeometry & {
+  id: string;
+  text: string;
+  font: CoverFont;
+  color: string;
+  role: PhotobookTextObjectRole;
 };
 
 type TextBoxInteraction =
@@ -69,17 +80,10 @@ function clamp(value: number, min: number, max: number) {
 
 function clampWidth(
   width: number,
-  x: number,
-  scale: number,
   minWidth: number,
   maxWidth: number,
 ) {
-  const maxWidthForPosition = Math.max(
-    minWidth,
-    Math.min(maxWidth, ((Math.min(x, 1 - x) - 0.015) * 2) / scale),
-  );
-
-  return clamp(width, minWidth, maxWidthForPosition);
+  return clamp(width, minWidth, maxWidth);
 }
 
 function clampGeometry(
@@ -90,7 +94,7 @@ function clampGeometry(
   maxWidth: number,
 ): EditableTextGeometry {
   const scale = clamp(geometry.scale, minScale, maxScale);
-  const width = clampWidth(geometry.width, geometry.x, scale, minWidth, maxWidth);
+  const width = clampWidth(geometry.width, minWidth, maxWidth);
   const safeX = clamp((width * scale) / 2 + 0.015, 0.035, 0.49);
   const safeY = clamp(0.04 * scale + 0.015, 0.05, 0.16);
 
@@ -122,9 +126,9 @@ export function EditableTextBox({
   ariaLabel,
   children,
   minScale = 0.35,
-  maxScale = 2.5,
-  minWidth = 0.15,
-  maxWidth = 0.95,
+  maxScale = 2.8,
+  minWidth = 0.12,
+  maxWidth = 0.98,
   className,
   chromeRadiusClassName = "rounded-xl",
   onGeometryChange,
@@ -320,14 +324,14 @@ export function EditableTextBox({
       <div
         aria-hidden="true"
         className={cn(
-          "photobook-editor-chrome pointer-events-none absolute inset-0 border border-black/[0.28] opacity-0 transition-opacity duration-200 dark:border-white/[0.35]",
+          "photobook-editor-chrome pointer-events-none absolute inset-0 border border-black/[0.24] opacity-0 shadow-[0_0_0_1px_rgb(255_255_255_/_0.04)] transition-opacity duration-200 dark:border-white/[0.35] dark:shadow-[0_0_0_1px_rgb(0_0_0_/_0.18)]",
           chromeRadiusClassName,
           editable ? "group-hover:opacity-100 group-focus-visible:opacity-100" : "",
           showChrome ? "opacity-100" : "",
         )}
       />
       <div
-        className="relative z-10 w-full max-w-none whitespace-normal"
+        className="relative z-10 w-full max-w-none whitespace-pre-wrap"
         style={{ overflowWrap: "normal", wordBreak: "normal" }}
       >
         {children}
@@ -344,7 +348,7 @@ export function EditableTextBox({
               type="button"
               aria-label={label}
               className={cn(
-                "photobook-editor-chrome absolute grid size-5 place-items-center opacity-0 transition duration-200 hover:scale-110",
+                "photobook-editor-chrome absolute grid size-5 place-items-center opacity-0 transition duration-200 hover:scale-110 active:scale-95",
                 positionClass,
                 "group-hover:opacity-100 group-focus-visible:opacity-100",
                 showChrome ? "opacity-100" : "",
@@ -354,7 +358,7 @@ export function EditableTextBox({
               onPointerUp={handlePointerEnd}
               onPointerCancel={handlePointerEnd}
             >
-              <span className="size-[7px] rounded-full border border-white/80 bg-black/85 shadow-[0_1px_4px_rgb(0_0_0_/_0.2)] dark:border-black/55 dark:bg-white/90" />
+              <span className="size-[7px] rounded-full border border-white/80 bg-black/85 shadow-[0_1px_5px_rgb(0_0_0_/_0.22)] dark:border-black/55 dark:bg-white/90" />
             </button>
           ))
         : null}
@@ -368,7 +372,7 @@ export function EditableTextBox({
               type="button"
               aria-label={`Adjust text ${side} edge`}
               className={cn(
-                "photobook-editor-chrome absolute grid h-6 w-5 place-items-center opacity-0 transition duration-200 hover:scale-110",
+                "photobook-editor-chrome absolute grid h-6 w-5 place-items-center opacity-0 transition duration-200 hover:scale-110 active:scale-95",
                 positionClass,
                 "group-hover:opacity-100 group-focus-visible:opacity-100",
                 showChrome ? "opacity-100" : "",
@@ -379,7 +383,7 @@ export function EditableTextBox({
               onPointerUp={handlePointerEnd}
               onPointerCancel={handlePointerEnd}
             >
-              <span className="h-3 w-[7px] rounded-full border border-white/80 bg-black/85 shadow-[0_1px_4px_rgb(0_0_0_/_0.2)] dark:border-black/55 dark:bg-white/90" />
+              <span className="h-3 w-[7px] rounded-full border border-white/80 bg-black/85 shadow-[0_1px_5px_rgb(0_0_0_/_0.22)] dark:border-black/55 dark:bg-white/90" />
             </button>
           ))
         : null}
