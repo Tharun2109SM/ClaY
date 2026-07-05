@@ -11,6 +11,10 @@ const messages: Record<string, string> = {
     "Supabase environment variables are missing. Add them to .env.local to enable auth.",
   "invalid-credentials": "Those credentials do not match an account.",
   "unable-to-create-account": "We could not create that account. Try again.",
+  "confirm-email":
+    "Account created. Check your email to confirm it, then sign in to join this room.",
+  "invalid-callback":
+    "We could not confirm that sign-in link. Sign in to continue.",
 };
 
 export function AuthCard({
@@ -25,9 +29,11 @@ export function AuthCard({
   const isSignUp = mode === "sign-up";
   const nextPath = next?.startsWith("/") && !next.startsWith("//") ? next : "";
   const alternateAuthHref = new URLSearchParams();
+  const signInContinueHref = new URLSearchParams();
 
   if (nextPath) {
     alternateAuthHref.set("next", nextPath);
+    signInContinueHref.set("next", nextPath);
   }
 
   return (
@@ -51,6 +57,18 @@ export function AuthCard({
           {message ? (
             <div className="rounded-md border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
               {messages[message] ?? "Something needs your attention."}
+              {message === "confirm-email" ? (
+                <Link
+                  href={`/auth/sign-in${
+                    signInContinueHref.size > 0
+                      ? `?${signInContinueHref.toString()}`
+                      : ""
+                  }`}
+                  className="mt-3 block font-medium text-foreground underline-offset-4 hover:underline"
+                >
+                  After confirming, sign in to continue
+                </Link>
+              ) : null}
             </div>
           ) : null}
           <form

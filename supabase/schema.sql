@@ -607,35 +607,62 @@ as $$
   limit 1;
 $$;
 
-create or replace function public.join_room_by_invite(token text)
-returns uuid
+drop function if exists public.join_room_by_invite(text);
+
+create or replace function public.join_room_by_invite(
+  invite_code text,
+  display_name text default null
+)
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   target_room_id uuid;
+  safe_display_name text;
 begin
   if auth.uid() is null then
-    return null;
+    raise exception 'join_room_by_invite requires an authenticated user'
+      using errcode = '28000';
+  end if;
+
+  if nullif(btrim(invite_code), '') is null then
+    raise exception 'Invite code is required'
+      using errcode = '22023';
   end if;
 
   select id into target_room_id
   from public.rooms
-  where invite_token = token
+  where invite_token = btrim(invite_code)
     and deleted_at is null;
 
   if target_room_id is null then
-    return null;
+    raise exception 'Invite not found'
+      using errcode = 'P0002';
   end if;
 
   perform public.ensure_current_user_profile();
+
+  safe_display_name := nullif(btrim(display_name), '');
+
+  if safe_display_name is not null
+    and safe_display_name !~* '^\S+@\S+\.\S+$'
+  then
+    update public.profiles
+    set display_name = safe_display_name,
+        updated_at = now()
+    where id = auth.uid();
+  end if;
 
   insert into public.room_members (room_id, user_id, role)
   values (target_room_id, auth.uid(), 'member')
   on conflict (room_id, user_id) do nothing;
 
-  return target_room_id;
+  return jsonb_build_object(
+    'success', true,
+    'room_id', target_room_id
+  );
 end;
 $$;
 
@@ -767,6 +794,6 @@ $$;
 
 grant usage on schema public to anon, authenticated;
 grant execute on function public.get_invite_preview(text) to anon, authenticated;
-grant execute on function public.join_room_by_invite(text) to authenticated;
+grant execute on function public.join_room_by_invite(text, text) to authenticated;
 grant execute on function public.delete_photo_for_current_user(uuid) to authenticated;
 grant execute on function public.delete_room_for_current_user(uuid) to authenticated;

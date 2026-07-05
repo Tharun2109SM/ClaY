@@ -6,6 +6,7 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getSiteUrl } from "@/lib/env";
 import { getImageDimensions } from "@/lib/images";
@@ -93,6 +94,40 @@ function logCoverSaveDebug(label: string, value: unknown) {
   }
 }
 
+function isRpcSignatureError(error: {
+  message?: string;
+  code?: string | null;
+} | null) {
+  if (!error) {
+    return false;
+  }
+
+  const message = error.message?.toLowerCase() ?? "";
+
+  return (
+    error.code === "PGRST202" ||
+    error.code === "42883" ||
+    message.includes("could not find the function") ||
+    message.includes("does not exist")
+  );
+}
+
+function getInviteJoinRoomId(result: unknown) {
+  if (typeof result === "string" && result) {
+    return result;
+  }
+
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const roomId = (result as { room_id?: unknown }).room_id;
+
+    if (typeof roomId === "string" && roomId) {
+      return roomId;
+    }
+  }
+
+  return null;
+}
+
 function logCreateRoomStep(
   step: string,
   details: Record<string, string | number | boolean | null>,
@@ -149,6 +184,37 @@ function getAuthFailurePath(path: "/auth/sign-in" | "/auth/sign-up", {
   }
 
   return `${path}?${params.toString()}`;
+}
+
+async function getAuthRedirectOrigin() {
+  const headersList = await headers();
+  const origin = headersList.get("origin");
+
+  if (origin) {
+    return origin;
+  }
+
+  const host =
+    headersList.get("x-forwarded-host") ?? headersList.get("host");
+
+  if (host) {
+    const protocol =
+      headersList.get("x-forwarded-proto") ??
+      (host.startsWith("localhost") || host.startsWith("127.0.0.1")
+        ? "http"
+        : "https");
+
+    return `${protocol}://${host}`;
+  }
+
+  return getSiteUrl();
+}
+
+async function getEmailRedirectTo(nextPath: string) {
+  const origin = await getAuthRedirectOrigin();
+  const params = new URLSearchParams({ next: nextPath });
+
+  return `${origin}/auth/callback?${params.toString()}`;
 }
 
 const maxUploadSize = 15 * 1024 * 1024;
@@ -252,15 +318,20 @@ function buildStorageKeys({
 }
 
 export async function signInAction(formData: FormData) {
+  const nextPath = getSafeNextPath(getString(formData, "next") || "/dashboard");
   const supabase = await createSupabaseServerClient();
 
   if (!supabase) {
-    redirect("/auth/sign-in?message=missing-config");
+    redirect(
+      getAuthFailurePath("/auth/sign-in", {
+        message: "missing-config",
+        next: nextPath,
+      }),
+    );
   }
 
   const email = getString(formData, "email");
   const password = getString(formData, "password");
-  const nextPath = getSafeNextPath(getString(formData, "next") || "/dashboard");
 
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
@@ -277,16 +348,21 @@ export async function signInAction(formData: FormData) {
 }
 
 export async function signUpAction(formData: FormData) {
+  const nextPath = getSafeNextPath(getString(formData, "next") || "/dashboard");
   const supabase = await createSupabaseServerClient();
 
   if (!supabase) {
-    redirect("/auth/sign-up?message=missing-config");
+    redirect(
+      getAuthFailurePath("/auth/sign-up", {
+        message: "missing-config",
+        next: nextPath,
+      }),
+    );
   }
 
   const email = getString(formData, "email");
   const password = getString(formData, "password");
   const displayName = getString(formData, "display_name");
-  const nextPath = getSafeNextPath(getString(formData, "next") || "/dashboard");
 
   const { data, error } = await supabase.auth.signUp({
     email,
@@ -297,7 +373,7 @@ export async function signUpAction(formData: FormData) {
         name: displayName,
         full_name: displayName,
       },
-      emailRedirectTo: `${getSiteUrl()}${nextPath}`,
+      emailRedirectTo: await getEmailRedirectTo(nextPath),
     },
   });
 
@@ -305,6 +381,15 @@ export async function signUpAction(formData: FormData) {
     redirect(
       getAuthFailurePath("/auth/sign-up", {
         message: "unable-to-create-account",
+        next: nextPath,
+      }),
+    );
+  }
+
+  if (!data.session) {
+    redirect(
+      getAuthFailurePath("/auth/sign-up", {
+        message: "confirm-email",
         next: nextPath,
       }),
     );
@@ -326,8 +411,15 @@ export async function signUpAction(formData: FormData) {
 
 export async function signOutAction() {
   const supabase = await createSupabaseServerClient();
-  await supabase?.auth.signOut();
-  redirect("/");
+  const { error } = supabase
+    ? await supabase.auth.signOut()
+    : { error: null };
+
+  if (error) {
+    logSupabaseIssue("Unable to sign out", error);
+  }
+
+  redirect("/auth/sign-in");
 }
 
 export async function createRoomAction(formData: FormData) {
@@ -544,13 +636,21 @@ export async function createRoomAction(formData: FormData) {
   redirect(`/rooms/${roomId}`);
 }
 
-export async function joinRoomAction(formData: FormData) {
-  const token = getString(formData, "token");
-  const displayName = getString(formData, "display_name");
+export async function joinRoomByInviteAction(
+  inviteCode: string,
+  displayName: string,
+) {
+  const token = inviteCode.trim();
+  const safeDisplayName = displayName.trim();
+
   const supabase = await createSupabaseServerClient();
 
   if (!supabase) {
     redirect(`/auth/sign-in?message=missing-config&next=/invite/${token}`);
+  }
+
+  if (!token) {
+    redirect("/dashboard");
   }
 
   const {
@@ -561,26 +661,52 @@ export async function joinRoomAction(formData: FormData) {
     redirect(`/auth/sign-in?next=/invite/${token}`);
   }
 
-  await supabase.rpc("ensure_current_user_profile");
+  const { error: ensureProfileError } = await supabase.rpc(
+    "ensure_current_user_profile",
+  );
 
-  if (displayName && !isEmailLike(displayName)) {
+  if (ensureProfileError) {
+    logSupabaseIssue(
+      "Unable to ensure profile before joining room",
+      ensureProfileError,
+    );
+  }
+
+  if (safeDisplayName && !isEmailLike(safeDisplayName)) {
     const { error: profileError } = await supabase
       .from("profiles")
       .update({
-        display_name: displayName,
+        display_name: safeDisplayName,
         email: user.email ?? null,
       })
       .eq("id", user.id);
 
     if (profileError) {
-      logSupabaseIssue("Unable to update profile display name before joining room", profileError);
+      logSupabaseIssue(
+        "Unable to update profile display name before joining room",
+        profileError,
+      );
     }
   }
 
-  const { data: roomId, error: roomError } = await supabase.rpc(
+  let { data: joinResult, error: roomError } = await supabase.rpc(
     "join_room_by_invite",
-    { token },
+    {
+      invite_code: token,
+      display_name: safeDisplayName || null,
+    },
   );
+
+  if (isRpcSignatureError(roomError)) {
+    const legacyJoinResult = await supabase.rpc("join_room_by_invite", {
+      token,
+    });
+
+    joinResult = legacyJoinResult.data;
+    roomError = legacyJoinResult.error;
+  }
+
+  const roomId = getInviteJoinRoomId(joinResult);
 
   if (roomError || !roomId) {
     if (roomError) {
@@ -605,6 +731,13 @@ export async function joinRoomAction(formData: FormData) {
   revalidatePath("/dashboard");
   revalidatePath(`/rooms/${roomId}`);
   redirect(`/rooms/${roomId}`);
+}
+
+export async function joinRoomAction(formData: FormData) {
+  const token = getString(formData, "token");
+  const displayName = getString(formData, "display_name");
+
+  await joinRoomByInviteAction(token, displayName);
 }
 
 export async function deleteRoomAction(roomId: string): Promise<{

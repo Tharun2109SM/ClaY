@@ -28,7 +28,7 @@ export function AppHeader({ email }: { email?: string | null }) {
               </Link>
               <Separator orientation="vertical" className="hidden h-6 sm:block" />
               <form action={signOutAction}>
-                <Button variant="outline" size="sm">
+                <Button type="submit" variant="outline" size="sm">
                   Sign out
                 </Button>
               </form>

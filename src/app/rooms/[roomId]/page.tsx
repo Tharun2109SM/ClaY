@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { BookOpen, Images, Users } from "lucide-react";
 import { BetaBadge } from "@/components/photobook/beta-badge";
@@ -21,6 +22,29 @@ import {
 } from "@/lib/supabase/queries";
 
 export const dynamic = "force-dynamic";
+
+function getRequestSiteUrl(headersList: Headers) {
+  const configuredUrl = getSiteUrl();
+
+  if (configuredUrl !== "http://localhost:3000") {
+    return configuredUrl;
+  }
+
+  const host =
+    headersList.get("x-forwarded-host") ?? headersList.get("host");
+
+  if (!host) {
+    return configuredUrl;
+  }
+
+  const protocol =
+    headersList.get("x-forwarded-proto") ??
+    (host.startsWith("localhost") || host.startsWith("127.0.0.1")
+      ? "http"
+      : "https");
+
+  return `${protocol}://${host}`;
+}
 
 export default async function RoomDetailPage({
   params,
@@ -51,7 +75,10 @@ export default async function RoomDetailPage({
 
   const { members, error: membersError } = await getRoomMembers(room.id);
   const { photos, error: galleryError } = await getRoomPhotos(room.id);
-  const inviteUrl = `${getSiteUrl()}/invite/${room.invite_token}`;
+  const requestHeaders = await headers();
+  const inviteUrl = `${getRequestSiteUrl(requestHeaders)}/invite/${
+    room.invite_token
+  }`;
   const isHost = room.created_by === user.id;
 
   return (

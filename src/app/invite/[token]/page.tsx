@@ -10,6 +10,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -32,15 +34,40 @@ function isEmailLike(value: string | null | undefined) {
   return Boolean(value && /^\S+@\S+\.\S+$/.test(value.trim()));
 }
 
+type InvitePreview = {
+  name: string;
+  occasion: string | null;
+  location: string | null;
+  date_label: string | null;
+};
+
+function getInviteMessage(message: string | undefined, code: string | undefined) {
+  if (message === "invalid-invite") {
+    return "This invite link is no longer available.";
+  }
+
+  if (message === "join-failed") {
+    return `We could not add you to this room. Try again.${
+      code ? ` (${code})` : ""
+    }`;
+  }
+
+  if (message) {
+    return "We could not add you to this room. Try again.";
+  }
+
+  return null;
+}
+
 export default async function InvitePage({
   params,
   searchParams,
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ message?: string; code?: string; details?: string }>;
+  searchParams: Promise<{ message?: string; code?: string }>;
 }) {
   const { token } = await params;
-  const { message, code, details } = await searchParams;
+  const { message, code } = await searchParams;
   const supabase = await createSupabaseServerClient();
 
   if (!supabase) {
@@ -60,11 +87,18 @@ export default async function InvitePage({
   const needsDisplayName = Boolean(
     user && (!profile?.display_name || isEmailLike(profile.display_name)),
   );
+  const currentDisplayName =
+    profile?.display_name && !isEmailLike(profile.display_name)
+      ? profile.display_name
+      : "";
 
-  const { data: room, error: previewError } = await supabase.rpc(
+  const { data: roomPreview, error: previewError } = await supabase.rpc(
     "get_invite_preview",
     { token },
   );
+  const room = Array.isArray(roomPreview)
+    ? ((roomPreview[0] ?? null) as InvitePreview | null)
+    : ((roomPreview ?? null) as InvitePreview | null);
 
   if (previewError) {
     logInviteIssue("Unable to load invite preview", previewError);
@@ -72,6 +106,7 @@ export default async function InvitePage({
 
   const nextPath = `/invite/${token}`;
   const encodedNext = encodeURIComponent(nextPath);
+  const inviteMessage = getInviteMessage(message, code);
 
   return (
     <main className="min-h-screen bg-background px-6 py-8">
@@ -89,50 +124,47 @@ export default async function InvitePage({
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-5">
-            {message ? (
+            {inviteMessage ? (
               <div className="rounded-md border bg-muted px-4 py-3 text-sm text-muted-foreground">
-                {message === "join-failed"
-                  ? `We could not join this room${
-                      code ? ` (${code})` : ""
-                    }. ${details ?? "Try the invite link again."}`
-                  : "We could not join this room. Try the invite link again."}
+                {inviteMessage}
               </div>
             ) : null}
             {room ? (
               <>
                 <div className="rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">{room.name}</p>
-                <p className="mt-1">{room.occasion}</p>
-                <p className="mt-2">
-                  {[room.location, room.date_label].filter(Boolean).join(" · ")}
-                </p>
+                  <p className="font-medium text-foreground">{room.name}</p>
+                  {room.occasion ? <p className="mt-1">{room.occasion}</p> : null}
+                  <p className="mt-2">
+                    {[room.location, room.date_label]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
                 </div>
                 {user ? (
                   <form action={joinRoomAction} className="grid gap-3">
                     <input type="hidden" name="token" value={token} />
-                    {needsDisplayName ? (
-                      <div className="grid gap-2">
-                        <label
-                          htmlFor="display_name"
-                          className="text-sm text-muted-foreground"
-                        >
-                          Your name
-                        </label>
-                        <input
-                          id="display_name"
-                          name="display_name"
-                          placeholder="Tharun"
-                          required
-                          className="h-10 rounded-md border bg-background px-3 text-sm"
-                        />
-                      </div>
-                    ) : null}
+                    <div className="grid gap-2">
+                      <Label htmlFor="display_name">Your name</Label>
+                      <Input
+                        id="display_name"
+                        name="display_name"
+                        placeholder="Tharun"
+                        defaultValue={currentDisplayName}
+                        required={needsDisplayName}
+                      />
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        This name will appear with the photos you upload.
+                      </p>
+                    </div>
                     <Button type="submit" className="w-full">
                       Join room
                     </Button>
                   </form>
                 ) : (
                   <div className="grid gap-3">
+                    <p className="text-center text-sm text-muted-foreground">
+                      Create an account or sign in to join this room.
+                    </p>
                     <Link
                       href={`/auth/sign-in?next=${encodedNext}`}
                       className={buttonVariants({ className: "w-full" })}

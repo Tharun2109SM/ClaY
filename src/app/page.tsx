@@ -111,7 +111,7 @@ export default async function Home() {
                   New room
                 </Link>
                 <form action={signOutAction}>
-                  <Button className={landingSecondaryButton}>
+                  <Button type="submit" className={landingSecondaryButton}>
                     Sign out
                   </Button>
                 </form>
