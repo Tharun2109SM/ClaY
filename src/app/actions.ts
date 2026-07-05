@@ -259,6 +259,7 @@ type UploadActionResult =
   | {
       success: false;
       error: string;
+      code: string;
     }
   | {
       success: true;
@@ -321,23 +322,47 @@ function getMissingUploadEnvironmentWarnings() {
   return warnings;
 }
 
-function getUploadFailure(error: string): UploadActionResult {
+function getUploadFailure(error: string, code: string): UploadActionResult {
   return {
     success: false,
     error,
+    code,
   };
 }
 
 function getErrorLogDetails(error: unknown) {
   if (error instanceof Error) {
+    const errorWithCode = error as Error & { code?: unknown; Code?: unknown };
+
     return {
       name: error.name,
       message: error.message,
+      code: errorWithCode.Code ?? errorWithCode.code ?? null,
+    };
+  }
+
+  if (error && typeof error === "object") {
+    const errorRecord = error as {
+      message?: unknown;
+      name?: unknown;
+      code?: unknown;
+      Code?: unknown;
+    };
+
+    return {
+      name: typeof errorRecord.name === "string" ? errorRecord.name : null,
+      message:
+        typeof errorRecord.message === "string"
+          ? errorRecord.message
+          : String(error),
+      code: errorRecord.Code ?? errorRecord.code ?? null,
     };
   }
 
   return {
     message: String(error),
+    name: null,
+    code: null,
   };
 }
 
@@ -375,18 +400,6 @@ async function deleteR2Objects(keys: string[]) {
       );
     }
   }
-}
-
-function getUploadErrorRedirect(roomId: string, message: string): never {
-  redirect(`/rooms/${roomId}?upload=error&message=${message}`);
-}
-
-function getMissingR2Redirect(roomId: string, missingVariable: string): never {
-  redirect(
-    `/rooms/${roomId}?upload=error&message=missing-r2-env&missing=${encodeURIComponent(
-      missingVariable,
-    )}`,
-  );
 }
 
 function buildStorageKeys({
@@ -959,241 +972,306 @@ export async function deleteRoomAction(roomId: string): Promise<{
 export async function uploadPhotosAction(
   formData: FormData,
 ): Promise<UploadActionResult> {
-  const roomId = getString(formData, "room_id");
-
-  logUploadEvent("[upload-runtime]", process.env.VERCEL ? "vercel" : "local");
-  logUploadEvent("[upload-room-id]", roomId || null);
-
-  if (!roomId) {
-    redirect("/dashboard");
-  }
-
-  const missingEnv = getMissingUploadEnvironment();
-  const missingEnvWarnings = getMissingUploadEnvironmentWarnings();
-
-  if (missingEnvWarnings.length > 0) {
-    logUploadEvent("[upload-env-warning]", missingEnvWarnings);
-  }
-
-  if (missingEnv.length > 0) {
-    const message = `Missing production upload configuration: ${missingEnv.join(", ")}`;
-
-    logUploadEvent("[upload-missing-env]", missingEnv);
-
-    return getUploadFailure(message);
-  }
-
-  const supabase = await createSupabaseServerClient();
-
-  if (!supabase) {
-    logUploadEvent("[upload-missing-env]", [
-      "NEXT_PUBLIC_SUPABASE_URL",
-      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    ]);
-
-    return getUploadFailure(
-      "Missing production upload configuration: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    );
-  }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  logUploadEvent("[upload-user-id]", user?.id ?? null);
-
-  if (!user) {
-    redirect("/auth/sign-in");
-  }
-
-  const { data: isMember, error: membershipError } = await supabase.rpc(
-    "is_room_member",
-    { target_room_id: roomId },
-  );
-
-  logUploadEvent("[upload-membership]", {
-    isMember: Boolean(isMember),
-    error: membershipError ? toSupabaseIssue(membershipError) : null,
-  });
-
-  if (membershipError || !isMember) {
-    getUploadErrorRedirect(roomId, "not-a-member");
-  }
-
-  const files = formData
-    .getAll("photos")
-    .filter((file): file is File => file instanceof File && file.size > 0);
-  const thumbnails = formData
-    .getAll("thumbnails")
-    .filter((file): file is File => file instanceof File && file.size > 0);
-  const originalFileNames = formData
-    .getAll("original_file_names")
-    .map((value) => (typeof value === "string" ? value.trim() : ""));
-
-  logUploadEvent("[upload-attempt]", {
-    roomId,
-    userId: user.id,
-    fileCount: files.length,
-  });
-
-  if (files.length === 0) {
-    getUploadErrorRedirect(roomId, "no-files");
-  }
-
-  if (files.length !== thumbnails.length || files.length !== originalFileNames.length) {
-    getUploadErrorRedirect(roomId, "mismatched-files");
-  }
-
-  if (files.length > maxUploadCount) {
-    getUploadErrorRedirect(roomId, "too-many-files");
-  }
-
-  let r2: S3Client;
-  let bucket: string;
-
   try {
-    assertR2Configured();
-    r2 = getR2Client();
-    bucket = getR2BucketName();
-  } catch (error) {
-    if (error instanceof R2ConfigurationError) {
-      const [firstMissingVariable] = error.missingVariables;
+    const roomId = getString(formData, "room_id");
+    const files = formData
+      .getAll("photos")
+      .filter((file): file is File => file instanceof File && file.size > 0);
+    const thumbnails = formData
+      .getAll("thumbnails")
+      .filter((file): file is File => file instanceof File && file.size > 0);
+    const originalFileNames = formData
+      .getAll("original_file_names")
+      .map((value) => (typeof value === "string" ? value.trim() : ""));
 
-      logUploadEvent("[upload-missing-env]", error.missingVariables);
-      console.warn("Cloudflare R2 configuration is incomplete", {
-        missingVariables: error.missingVariables,
-        checkedVariables: [
-          "CLOUDFLARE_R2_ACCOUNT_ID",
-          "CLOUDFLARE_R2_ACCESS_KEY_ID",
-          "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
-          "CLOUDFLARE_R2_BUCKET_NAME",
-          "CLOUDFLARE_R2_PUBLIC_BASE_URL",
-        ],
-        envLoadedByServerAction: true,
-      });
+    logUploadEvent("[upload-runtime]", process.env.VERCEL ? "vercel" : "local");
+    logUploadEvent("[upload-server-start]", {
+      roomId,
+      fileCount: files.length,
+    });
+    logUploadEvent("[upload-env-check]", {
+      hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
+      hasAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+      hasR2AccountId: Boolean(getR2Env("CLOUDFLARE_R2_ACCOUNT_ID")),
+      hasR2AccessKeyId: Boolean(getR2Env("CLOUDFLARE_R2_ACCESS_KEY_ID")),
+      hasR2SecretAccessKey: Boolean(
+        getR2Env("CLOUDFLARE_R2_SECRET_ACCESS_KEY"),
+      ),
+      hasR2BucketName: Boolean(getR2Env("CLOUDFLARE_R2_BUCKET_NAME")),
+      hasR2PublicBaseUrl: Boolean(getR2Env("CLOUDFLARE_R2_PUBLIC_BASE_URL")),
+    });
 
-      getMissingR2Redirect(
-        roomId,
-        firstMissingVariable ?? "CLOUDFLARE_R2_PUBLIC_BASE_URL",
+    if (!roomId) {
+      return getUploadFailure("Missing room id for upload.", "missing_room_id");
+    }
+
+    const missingEnv = getMissingUploadEnvironment();
+    const missingEnvWarnings = getMissingUploadEnvironmentWarnings();
+
+    if (missingEnvWarnings.length > 0) {
+      logUploadEvent("[upload-env-warning]", missingEnvWarnings);
+    }
+
+    if (missingEnv.length > 0) {
+      const message = `Missing production upload configuration: ${missingEnv.join(", ")}`;
+
+      logUploadEvent("[upload-missing-env]", missingEnv);
+
+      return getUploadFailure(message, "missing_upload_env");
+    }
+
+    const supabase = await createSupabaseServerClient();
+
+    if (!supabase) {
+      logUploadEvent("[upload-missing-env]", [
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      ]);
+
+      return getUploadFailure(
+        "Missing production upload configuration: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY",
+        "missing_supabase_env",
       );
     }
 
-    logUploadEvent("[upload-r2-error]", getErrorLogDetails(error));
-    return getUploadFailure("Upload failed. Check production upload configuration.");
-  }
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  logUploadEvent("[upload-r2-start]", { bucket });
+    logUploadEvent("[upload-server-user]", {
+      userId: user?.id ?? null,
+      userEmail: user?.email ?? null,
+    });
 
-  const rows = [];
-
-  for (const [index, file] of files.entries()) {
-    const thumbnail = thumbnails[index];
-    const originalFileName = originalFileNames[index] || file.name;
-    const extension = allowedImageTypes.get(file.type);
-
-    if (!extension) {
-      getUploadErrorRedirect(roomId, "unsupported-type");
+    if (!user) {
+      return getUploadFailure("Please sign in to upload photos.", "auth_required");
     }
 
-    if (!thumbnail || thumbnail.type !== "image/webp") {
-      getUploadErrorRedirect(roomId, "unsupported-thumbnail");
+    const { data: isMember, error: membershipError } = await supabase.rpc(
+      "is_room_member",
+      { target_room_id: roomId },
+    );
+    const membership = {
+      isMember: Boolean(isMember),
+      error: membershipError ? toSupabaseIssue(membershipError) : null,
+    };
+
+    logUploadEvent("[upload-server-membership]", membership);
+
+    if (membershipError) {
+      return getUploadFailure(
+        "We could not confirm your room membership. Try again.",
+        "membership_check_failed",
+      );
     }
 
-    if (file.size > maxUploadSize) {
-      getUploadErrorRedirect(roomId, "file-too-large");
+    if (!isMember) {
+      return getUploadFailure(
+        "Only room members can upload photos here.",
+        "not_a_member",
+      );
     }
 
-    if (thumbnail.size > maxThumbnailSize) {
-      getUploadErrorRedirect(roomId, "thumbnail-too-large");
-    }
-
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const thumbnailBuffer = Buffer.from(await thumbnail.arrayBuffer());
-    const dimensions = getImageDimensions(buffer);
-    const thumbnailDimensions = getImageDimensions(thumbnailBuffer);
-
-    if (
-      !dimensions.width ||
-      !dimensions.height ||
-      Math.max(dimensions.width, dimensions.height) > maxImageLongEdge
-    ) {
-      getUploadErrorRedirect(roomId, "invalid-dimensions");
-    }
-
-    if (
-      !thumbnailDimensions.width ||
-      !thumbnailDimensions.height ||
-      Math.max(thumbnailDimensions.width, thumbnailDimensions.height) >
-        maxThumbnailLongEdge
-    ) {
-      getUploadErrorRedirect(roomId, "invalid-thumbnail-dimensions");
-    }
-
-    const { storageKey, thumbnailStorageKey } = buildStorageKeys({
+    logUploadEvent("[upload-attempt]", {
       roomId,
       userId: user.id,
-      extension,
+      fileCount: files.length,
     });
 
-    logUploadEvent("[upload-storage-key]", storageKey);
-    logUploadEvent("[upload-thumbnail-key]", thumbnailStorageKey);
-
-    try {
-      await r2.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: storageKey,
-          Body: buffer,
-          ContentType: file.type,
-        }),
-      );
-      await r2.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: thumbnailStorageKey,
-          Body: thumbnailBuffer,
-          ContentType: thumbnail.type,
-        }),
-      );
-    } catch (error) {
-      console.error("Unable to upload photo to R2", error);
-      logUploadEvent("[upload-r2-error]", getErrorLogDetails(error));
-      return getUploadFailure("Upload failed. Check production upload configuration.");
+    if (files.length === 0) {
+      return getUploadFailure("Choose at least one image to upload.", "no_files");
     }
 
-    rows.push({
-      room_id: roomId,
-      uploader_id: user.id,
-      storage_key: storageKey,
-      thumbnail_storage_key: thumbnailStorageKey,
-      original_file_name: originalFileName,
-      content_type: file.type,
-      thumbnail_content_type: thumbnail.type,
-      file_size: file.size,
-      thumbnail_file_size: thumbnail.size,
-      width: dimensions.width,
-      height: dimensions.height,
-      thumbnail_width: thumbnailDimensions.width,
-      thumbnail_height: thumbnailDimensions.height,
-      created_at: new Date().toISOString(),
+    if (
+      files.length !== thumbnails.length ||
+      files.length !== originalFileNames.length
+    ) {
+      return getUploadFailure(
+        "The optimized files did not match their thumbnails.",
+        "mismatched_files",
+      );
+    }
+
+    if (files.length > maxUploadCount) {
+      return getUploadFailure(
+        "Upload up to 12 photos at a time.",
+        "too_many_files",
+      );
+    }
+
+    let r2: S3Client;
+    let bucket: string;
+
+    try {
+      assertR2Configured();
+      r2 = getR2Client();
+      bucket = getR2BucketName();
+    } catch (error) {
+      logUploadEvent("[upload-r2-put-error]", getErrorLogDetails(error));
+      return getUploadFailure(
+        "Upload failed. Check production upload configuration.",
+        "storage_config_failed",
+      );
+    }
+
+    logUploadEvent("[upload-r2-start]", { bucket });
+
+    const insertPayload = [];
+
+    for (const [index, file] of files.entries()) {
+      const thumbnail = thumbnails[index];
+      const originalFileName = originalFileNames[index] || file.name;
+      const extension = allowedImageTypes.get(file.type);
+
+      if (!extension) {
+        return getUploadFailure(
+          "Only browser-optimizable image files are supported.",
+          "unsupported_type",
+        );
+      }
+
+      if (!thumbnail || thumbnail.type !== "image/webp") {
+        return getUploadFailure(
+          "A thumbnail could not be generated.",
+          "unsupported_thumbnail",
+        );
+      }
+
+      if (file.size > maxUploadSize) {
+        return getUploadFailure(
+          "Each optimized photo must be 15 MB or smaller.",
+          "file_too_large",
+        );
+      }
+
+      if (thumbnail.size > maxThumbnailSize) {
+        return getUploadFailure(
+          "Each thumbnail must be 3 MB or smaller.",
+          "thumbnail_too_large",
+        );
+      }
+
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const thumbnailBuffer = Buffer.from(await thumbnail.arrayBuffer());
+      const dimensions = getImageDimensions(buffer);
+      const thumbnailDimensions = getImageDimensions(thumbnailBuffer);
+
+      if (
+        !dimensions.width ||
+        !dimensions.height ||
+        Math.max(dimensions.width, dimensions.height) > maxImageLongEdge
+      ) {
+        return getUploadFailure(
+          "The optimized image dimensions were too large.",
+          "invalid_dimensions",
+        );
+      }
+
+      if (
+        !thumbnailDimensions.width ||
+        !thumbnailDimensions.height ||
+        Math.max(thumbnailDimensions.width, thumbnailDimensions.height) >
+          maxThumbnailLongEdge
+      ) {
+        return getUploadFailure(
+          "The thumbnail dimensions were too large.",
+          "invalid_thumbnail_dimensions",
+        );
+      }
+
+      const { storageKey, thumbnailStorageKey } = buildStorageKeys({
+        roomId,
+        userId: user.id,
+        extension,
+      });
+
+      logUploadEvent("[upload-storage-key]", storageKey);
+      logUploadEvent("[upload-thumbnail-key]", thumbnailStorageKey);
+      logUploadEvent("[upload-r2-put-start]", {
+        storageKey,
+        thumbnailStorageKey,
+        contentType: file.type,
+        fileSize: file.size,
+      });
+
+      try {
+        await r2.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: storageKey,
+            Body: buffer,
+            ContentType: file.type,
+          }),
+        );
+        await r2.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: thumbnailStorageKey,
+            Body: thumbnailBuffer,
+            ContentType: thumbnail.type,
+          }),
+        );
+      } catch (error) {
+        console.error("Unable to upload photo to R2", error);
+        logUploadEvent("[upload-r2-put-error]", getErrorLogDetails(error));
+        return getUploadFailure(
+          "We could not upload your photo to storage. Try again.",
+          "r2_upload_failed",
+        );
+      }
+
+      insertPayload.push({
+        room_id: roomId,
+        uploader_id: user.id,
+        storage_key: storageKey,
+        thumbnail_storage_key: thumbnailStorageKey,
+        original_file_name: originalFileName,
+        content_type: file.type,
+        thumbnail_content_type: thumbnail.type,
+        file_size: file.size,
+        thumbnail_file_size: thumbnail.size,
+        width: dimensions.width,
+        height: dimensions.height,
+        thumbnail_width: thumbnailDimensions.width,
+        thumbnail_height: thumbnailDimensions.height,
+        caption: null,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    logUploadEvent("[upload-db-insert-payload]", insertPayload);
+
+    const { data, error } = await supabase
+      .from("photos")
+      .insert(insertPayload)
+      .select("id");
+
+    logUploadEvent("[upload-db-insert-result]", {
+      data,
+      error: error ? toSupabaseIssue(error) : null,
     });
+
+    if (error) {
+      return getUploadFailure(
+        error.message || "We could not save your photo.",
+        "db_insert_failed",
+      );
+    }
+
+    revalidatePath(`/rooms/${roomId}`);
+    revalidatePath("/dashboard");
+
+    return {
+      success: true,
+      count: insertPayload.length,
+    };
+  } catch (error) {
+    console.error("[upload-server-catch]", getErrorLogDetails(error));
+    return getUploadFailure(
+      "We could not upload your photos. Try again.",
+      "upload_unhandled_error",
+    );
   }
-
-  const { error } = await supabase.from("photos").insert(rows);
-
-  if (error) {
-    console.error("Unable to save photo metadata", error);
-    logUploadEvent("[upload-db-error]", toSupabaseIssue(error));
-    return getUploadFailure("We could not upload your photos. Try again.");
-  }
-
-  revalidatePath(`/rooms/${roomId}`);
-  revalidatePath("/dashboard");
-
-  return {
-    success: true,
-    count: rows.length,
-  };
 }
 
 export async function togglePhotoFavoriteAction(formData: FormData) {

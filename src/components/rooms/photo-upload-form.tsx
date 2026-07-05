@@ -77,16 +77,6 @@ function logUploadClientError(label: string, value: unknown) {
   }
 }
 
-function isNextRedirectError(error: unknown) {
-  if (!error || typeof error !== "object" || !("digest" in error)) {
-    return false;
-  }
-
-  const digest = (error as { digest?: unknown }).digest;
-
-  return typeof digest === "string" && digest.startsWith("NEXT_REDIRECT");
-}
-
 function getBaseName(fileName: string) {
   return fileName
     .replace(/\.[^.]+$/, "")
@@ -361,11 +351,15 @@ export function PhotoUploadForm({
         })),
       );
 
-      logUploadClient("[upload-start]", { roomId, fileCount: items.length });
+      logUploadClient("[upload-client-start]", {
+        roomId,
+        fileCount: items.length,
+        fileNames: items.map((item) => item.file.name),
+      });
 
       const result = await uploadPhotosAction(formData);
 
-      logUploadClient("[upload-result]", result ?? null);
+      logUploadClient("[upload-client-result]", result ?? null);
 
       if (result?.success === false) {
         setClientError(result.error);
@@ -380,12 +374,8 @@ export function PhotoUploadForm({
         router.refresh();
       }
     } catch (error) {
-      if (isNextRedirectError(error)) {
-        throw error;
-      }
-
       console.error("Unable to upload photos", error);
-      logUploadClientError("[upload-error]", error);
+      logUploadClientError("[upload-client-catch]", error);
       setClientError(
         error instanceof Error
           ? error.message
