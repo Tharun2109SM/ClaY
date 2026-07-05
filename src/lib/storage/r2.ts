@@ -12,6 +12,24 @@ export const r2EnvVariableNames = [
 
 export type R2EnvVariableName = (typeof r2EnvVariableNames)[number];
 
+const r2EnvAliases: Record<R2EnvVariableName, string[]> = {
+  CLOUDFLARE_R2_ACCOUNT_ID: ["CLOUDFLARE_R2_ACCOUNT_ID", "R2_ACCOUNT_ID"],
+  CLOUDFLARE_R2_ACCESS_KEY_ID: [
+    "CLOUDFLARE_R2_ACCESS_KEY_ID",
+    "R2_ACCESS_KEY_ID",
+  ],
+  CLOUDFLARE_R2_SECRET_ACCESS_KEY: [
+    "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+    "R2_SECRET_ACCESS_KEY",
+  ],
+  CLOUDFLARE_R2_BUCKET_NAME: ["CLOUDFLARE_R2_BUCKET_NAME", "R2_BUCKET_NAME"],
+  CLOUDFLARE_R2_PUBLIC_BASE_URL: [
+    "CLOUDFLARE_R2_PUBLIC_BASE_URL",
+    "R2_PUBLIC_URL",
+    "R2_PUBLIC_BASE_URL",
+  ],
+};
+
 export class R2ConfigurationError extends Error {
   missingVariables: R2EnvVariableName[];
 
@@ -22,8 +40,20 @@ export class R2ConfigurationError extends Error {
   }
 }
 
+export function getR2Env(name: R2EnvVariableName) {
+  for (const variableName of r2EnvAliases[name]) {
+    const value = process.env[variableName];
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 export function getMissingR2EnvVariables() {
-  return r2EnvVariableNames.filter((name) => !process.env[name]);
+  return r2EnvVariableNames.filter((name) => !getR2Env(name));
 }
 
 export function assertR2Configured() {
@@ -36,13 +66,11 @@ export function assertR2Configured() {
 
 export function getR2Client() {
   if (!r2Client) {
-    const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID;
+    const accountId = getR2Env("CLOUDFLARE_R2_ACCOUNT_ID");
+    const accessKeyId = getR2Env("CLOUDFLARE_R2_ACCESS_KEY_ID");
+    const secretAccessKey = getR2Env("CLOUDFLARE_R2_SECRET_ACCESS_KEY");
 
-    if (
-      !accountId ||
-      !process.env.CLOUDFLARE_R2_ACCESS_KEY_ID ||
-      !process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY
-    ) {
+    if (!accountId || !accessKeyId || !secretAccessKey) {
       throw new R2ConfigurationError(getMissingR2EnvVariables());
     }
 
@@ -50,8 +78,8 @@ export function getR2Client() {
       region: "auto",
       endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
       credentials: {
-        accessKeyId: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID,
-        secretAccessKey: process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY,
+        accessKeyId,
+        secretAccessKey,
       },
     });
   }
@@ -60,7 +88,7 @@ export function getR2Client() {
 }
 
 export function getR2BucketName() {
-  const bucket = process.env.CLOUDFLARE_R2_BUCKET_NAME;
+  const bucket = getR2Env("CLOUDFLARE_R2_BUCKET_NAME");
 
   if (!bucket) {
     throw new R2ConfigurationError(["CLOUDFLARE_R2_BUCKET_NAME"]);
@@ -70,7 +98,7 @@ export function getR2BucketName() {
 }
 
 export function getPhotoPublicUrl(storageKey: string) {
-  const baseUrl = process.env.CLOUDFLARE_R2_PUBLIC_BASE_URL;
+  const baseUrl = getR2Env("CLOUDFLARE_R2_PUBLIC_BASE_URL");
 
   if (!baseUrl) {
     return null;

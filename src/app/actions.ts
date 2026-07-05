@@ -12,6 +12,7 @@ import { getSiteUrl } from "@/lib/env";
 import { getImageDimensions } from "@/lib/images";
 import {
   assertR2Configured,
+  getR2Env,
   getR2BucketName,
   getR2Client,
   R2ConfigurationError,
@@ -92,6 +93,10 @@ function logCoverSaveDebug(label: string, value: unknown) {
   if (process.env.NODE_ENV !== "production") {
     console.error(label, value);
   }
+}
+
+function logUploadEvent(label: string, value: unknown) {
+  console.error(label, value);
 }
 
 function isRpcSignatureError(error: {
@@ -249,6 +254,92 @@ const coverTextPositions = new Set([
   "bottom-center",
 ]);
 const coverOverlayStyles = new Set(["none", "soft", "deep", "film"]);
+
+type UploadActionResult =
+  | {
+      success: false;
+      error: string;
+    }
+  | {
+      success: true;
+      count: number;
+    };
+
+function getMissingUploadEnvironment() {
+  const requiredUploadEnv = [
+    {
+      label: "NEXT_PUBLIC_SUPABASE_URL",
+      value: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    },
+    {
+      label: "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      value: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    },
+    {
+      label: "CLOUDFLARE_R2_ACCOUNT_ID or R2_ACCOUNT_ID",
+      value: getR2Env("CLOUDFLARE_R2_ACCOUNT_ID"),
+    },
+    {
+      label: "CLOUDFLARE_R2_ACCESS_KEY_ID or R2_ACCESS_KEY_ID",
+      value: getR2Env("CLOUDFLARE_R2_ACCESS_KEY_ID"),
+    },
+    {
+      label: "CLOUDFLARE_R2_SECRET_ACCESS_KEY or R2_SECRET_ACCESS_KEY",
+      value: getR2Env("CLOUDFLARE_R2_SECRET_ACCESS_KEY"),
+    },
+    {
+      label: "CLOUDFLARE_R2_BUCKET_NAME or R2_BUCKET_NAME",
+      value: getR2Env("CLOUDFLARE_R2_BUCKET_NAME"),
+    },
+    {
+      label: "CLOUDFLARE_R2_PUBLIC_BASE_URL or R2_PUBLIC_URL",
+      value: getR2Env("CLOUDFLARE_R2_PUBLIC_BASE_URL"),
+    },
+  ];
+
+  return requiredUploadEnv
+    .filter((entry) => !entry.value)
+    .map((entry) => entry.label);
+}
+
+function getMissingUploadEnvironmentWarnings() {
+  const warnings: string[] = [];
+
+  if (process.env.VERCEL && !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    warnings.push("SUPABASE_SERVICE_ROLE_KEY");
+  }
+
+  if (
+    process.env.VERCEL &&
+    !process.env.NEXT_PUBLIC_SITE_URL &&
+    !process.env.VERCEL_PROJECT_PRODUCTION_URL &&
+    !process.env.VERCEL_URL
+  ) {
+    warnings.push("NEXT_PUBLIC_SITE_URL");
+  }
+
+  return warnings;
+}
+
+function getUploadFailure(error: string): UploadActionResult {
+  return {
+    success: false,
+    error,
+  };
+}
+
+function getErrorLogDetails(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+    };
+  }
+
+  return {
+    message: String(error),
+  };
+}
 
 async function deleteR2Objects(keys: string[]) {
   const uniqueKeys = Array.from(new Set(keys.filter(Boolean)));
@@ -865,21 +956,51 @@ export async function deleteRoomAction(roomId: string): Promise<{
   redirect("/dashboard");
 }
 
-export async function uploadPhotosAction(formData: FormData) {
-  const supabase = await createSupabaseServerClient();
+export async function uploadPhotosAction(
+  formData: FormData,
+): Promise<UploadActionResult> {
   const roomId = getString(formData, "room_id");
+
+  logUploadEvent("[upload-runtime]", process.env.VERCEL ? "vercel" : "local");
+  logUploadEvent("[upload-room-id]", roomId || null);
 
   if (!roomId) {
     redirect("/dashboard");
   }
 
+  const missingEnv = getMissingUploadEnvironment();
+  const missingEnvWarnings = getMissingUploadEnvironmentWarnings();
+
+  if (missingEnvWarnings.length > 0) {
+    logUploadEvent("[upload-env-warning]", missingEnvWarnings);
+  }
+
+  if (missingEnv.length > 0) {
+    const message = `Missing production upload configuration: ${missingEnv.join(", ")}`;
+
+    logUploadEvent("[upload-missing-env]", missingEnv);
+
+    return getUploadFailure(message);
+  }
+
+  const supabase = await createSupabaseServerClient();
+
   if (!supabase) {
-    getUploadErrorRedirect(roomId, "missing-config");
+    logUploadEvent("[upload-missing-env]", [
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    ]);
+
+    return getUploadFailure(
+      "Missing production upload configuration: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    );
   }
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  logUploadEvent("[upload-user-id]", user?.id ?? null);
 
   if (!user) {
     redirect("/auth/sign-in");
@@ -889,6 +1010,11 @@ export async function uploadPhotosAction(formData: FormData) {
     "is_room_member",
     { target_room_id: roomId },
   );
+
+  logUploadEvent("[upload-membership]", {
+    isMember: Boolean(isMember),
+    error: membershipError ? toSupabaseIssue(membershipError) : null,
+  });
 
   if (membershipError || !isMember) {
     getUploadErrorRedirect(roomId, "not-a-member");
@@ -927,6 +1053,7 @@ export async function uploadPhotosAction(formData: FormData) {
     if (error instanceof R2ConfigurationError) {
       const [firstMissingVariable] = error.missingVariables;
 
+      logUploadEvent("[upload-missing-env]", error.missingVariables);
       console.warn("Cloudflare R2 configuration is incomplete", {
         missingVariables: error.missingVariables,
         checkedVariables: [
@@ -945,9 +1072,11 @@ export async function uploadPhotosAction(formData: FormData) {
       );
     }
 
-    console.error("R2 is not configured", error);
-    getUploadErrorRedirect(roomId, "storage-config");
+    logUploadEvent("[upload-r2-error]", getErrorLogDetails(error));
+    return getUploadFailure("Upload failed. Check production upload configuration.");
   }
+
+  logUploadEvent("[upload-r2-start]", { bucket });
 
   const rows = [];
 
@@ -1019,7 +1148,8 @@ export async function uploadPhotosAction(formData: FormData) {
       );
     } catch (error) {
       console.error("Unable to upload photo to R2", error);
-      getUploadErrorRedirect(roomId, "storage-failed");
+      logUploadEvent("[upload-r2-error]", getErrorLogDetails(error));
+      return getUploadFailure("Upload failed. Check production upload configuration.");
     }
 
     rows.push({
@@ -1044,7 +1174,8 @@ export async function uploadPhotosAction(formData: FormData) {
 
   if (error) {
     console.error("Unable to save photo metadata", error);
-    getUploadErrorRedirect(roomId, "metadata-failed");
+    logUploadEvent("[upload-db-error]", toSupabaseIssue(error));
+    return getUploadFailure("We could not upload your photos. Try again.");
   }
 
   revalidatePath(`/rooms/${roomId}`);
