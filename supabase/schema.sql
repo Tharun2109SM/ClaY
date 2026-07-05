@@ -793,6 +793,8 @@ end;
 $$;
 
 grant usage on schema public to anon, authenticated;
+grant execute on function public.is_room_member(uuid) to authenticated;
+grant execute on function public.is_room_owner(uuid) to authenticated;
 grant execute on function public.get_invite_preview(text) to anon, authenticated;
 grant execute on function public.join_room_by_invite(text, text) to authenticated;
 grant execute on function public.delete_photo_for_current_user(uuid) to authenticated;

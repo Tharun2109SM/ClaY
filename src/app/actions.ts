@@ -94,6 +94,12 @@ function logCoverSaveDebug(label: string, value: unknown) {
   }
 }
 
+function logUploadDebug(label: string, value: unknown) {
+  if (process.env.NODE_ENV !== "production") {
+    console.error(label, value);
+  }
+}
+
 function isRpcSignatureError(error: {
   message?: string;
   code?: string | null;
@@ -869,6 +875,8 @@ export async function uploadPhotosAction(formData: FormData) {
   const supabase = await createSupabaseServerClient();
   const roomId = getString(formData, "room_id");
 
+  logUploadDebug("[upload-room-id]", roomId || null);
+
   if (!roomId) {
     redirect("/dashboard");
   }
@@ -885,10 +893,17 @@ export async function uploadPhotosAction(formData: FormData) {
     redirect("/auth/sign-in");
   }
 
+  logUploadDebug("[upload-user]", user.id);
+
   const { data: isMember, error: membershipError } = await supabase.rpc(
     "is_room_member",
     { target_room_id: roomId },
   );
+
+  logUploadDebug("[upload-membership]", {
+    isMember: Boolean(isMember),
+    error: membershipError ? toSupabaseIssue(membershipError) : null,
+  });
 
   if (membershipError || !isMember) {
     getUploadErrorRedirect(roomId, "not-a-member");
@@ -1017,8 +1032,18 @@ export async function uploadPhotosAction(formData: FormData) {
           ContentType: thumbnail.type,
         }),
       );
+      logUploadDebug("[upload-r2-result]", {
+        index,
+        originalUploaded: true,
+        thumbnailUploaded: true,
+      });
     } catch (error) {
       console.error("Unable to upload photo to R2", error);
+      logUploadDebug("[upload-r2-result]", {
+        index,
+        originalUploaded: false,
+        thumbnailUploaded: false,
+      });
       getUploadErrorRedirect(roomId, "storage-failed");
     }
 
@@ -1042,8 +1067,14 @@ export async function uploadPhotosAction(formData: FormData) {
 
   const { error } = await supabase.from("photos").insert(rows);
 
+  logUploadDebug("[upload-db-result]", {
+    attempted: rows.length,
+    ok: !error,
+  });
+
   if (error) {
     console.error("Unable to save photo metadata", error);
+    logUploadDebug("[upload-db-error]", toSupabaseIssue(error));
     getUploadErrorRedirect(roomId, "metadata-failed");
   }
 
