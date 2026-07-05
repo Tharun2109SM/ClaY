@@ -65,28 +65,6 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function logUploadClient(label: string, value: unknown) {
-  if (process.env.NODE_ENV !== "production") {
-    console.log(label, value);
-  }
-}
-
-function logUploadClientError(label: string, value: unknown) {
-  if (process.env.NODE_ENV !== "production") {
-    console.error(label, value);
-  }
-}
-
-function isNextRedirectError(error: unknown) {
-  if (!error || typeof error !== "object" || !("digest" in error)) {
-    return false;
-  }
-
-  const digest = (error as { digest?: unknown }).digest;
-
-  return typeof digest === "string" && digest.startsWith("NEXT_REDIRECT");
-}
-
 function getBaseName(fileName: string) {
   return fileName
     .replace(/\.[^.]+$/, "")
@@ -328,29 +306,8 @@ export function PhotoUploadForm({
         })),
       );
 
-      logUploadClient("[upload-start]", { roomId, fileCount: items.length });
-
       startTransition(() => {
-        void (async () => {
-          try {
-            const result = await uploadPhotosAction(formData);
-            logUploadClient("[upload-result]", result ?? null);
-          } catch (error) {
-            if (isNextRedirectError(error)) {
-              throw error;
-            }
-
-            logUploadClientError("[upload-error]", error);
-            setClientError("We could not upload your photos. Try again.");
-            setItems((current) =>
-              current.map((item) =>
-                item.status === "uploading"
-                  ? { ...item, status: "error", detail: "Upload failed" }
-                  : item,
-              ),
-            );
-          }
-        })();
+        void uploadPhotosAction(formData);
       });
     } catch (error) {
       console.error("Unable to optimize photos", error);
