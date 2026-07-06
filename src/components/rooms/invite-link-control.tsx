@@ -3,12 +3,23 @@
 import { useState } from "react";
 import { Check, Copy, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 type CopyState = "idle" | "copied" | "error";
 
+function getShortInviteUrl(inviteUrl: string) {
+  try {
+    const url = new URL(inviteUrl);
+    const token = url.pathname.split("/").filter(Boolean).at(-1) ?? "";
+
+    return `${url.host}/invite/${token.slice(0, 8)}…`;
+  } catch {
+    return inviteUrl;
+  }
+}
+
 export function InviteLinkControl({ inviteUrl }: { inviteUrl: string }) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const shortInviteUrl = getShortInviteUrl(inviteUrl);
 
   async function handleCopy() {
     try {
@@ -21,8 +32,19 @@ export function InviteLinkControl({ inviteUrl }: { inviteUrl: string }) {
 
   return (
     <div className="grid gap-3">
-      <Input readOnly value={inviteUrl} aria-label="Invite link" />
-      <Button type="button" variant="outline" onClick={handleCopy}>
+      <div
+        className="min-w-0 rounded-2xl border border-foreground/10 bg-background/50 px-4 py-3 text-sm text-muted-foreground shadow-sm dark:bg-black/22"
+        title={inviteUrl}
+        aria-label="Invite link"
+      >
+        <p className="truncate">{shortInviteUrl}</p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleCopy}
+        className="h-10 rounded-full border-foreground/12 bg-background/45 transition duration-300 hover:-translate-y-0.5 hover:border-foreground/24 dark:bg-white/[0.045]"
+      >
         {copyState === "copied" ? (
           <Check className="size-4" />
         ) : copyState === "error" ? (
@@ -38,12 +60,12 @@ export function InviteLinkControl({ inviteUrl }: { inviteUrl: string }) {
       </Button>
       {copyState === "copied" ? (
         <p className="text-xs text-muted-foreground">
-          Anyone with this link can request to join this room.
+          Invite link copied. Anyone you send it to can join after signing in.
         </p>
       ) : null}
       {copyState === "error" ? (
         <p className="text-xs text-destructive">
-          Copy was blocked by the browser. Select the link above instead.
+          Copy was blocked by the browser. Use your browser share controls.
         </p>
       ) : null}
     </div>

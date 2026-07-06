@@ -19,11 +19,11 @@ export function MemberList({ members }: { members: RoomMember[] }) {
       {members.map((member) => (
         <div
           key={member.id}
-          className="flex min-h-20 items-center justify-between gap-4 rounded-2xl border bg-background/45 px-4 py-3"
+          className="flex min-h-20 items-center justify-between gap-4 rounded-2xl border border-foreground/10 bg-background/45 px-4 py-3 shadow-sm transition duration-300 hover:border-foreground/18 hover:bg-muted/20 dark:bg-black/22"
         >
           <div className="flex min-w-0 flex-1 items-center gap-3.5">
-            <Avatar className="size-11 shrink-0">
-              <AvatarFallback>
+            <Avatar className="size-11 shrink-0 border border-foreground/10 shadow-sm">
+              <AvatarFallback className="bg-[#f7efe0] text-sm text-black dark:bg-white/10 dark:text-foreground">
                 {(getMemberName(member) ?? "?")
                   .slice(0, 2)
                   .toUpperCase()}
@@ -46,7 +46,7 @@ export function MemberList({ members }: { members: RoomMember[] }) {
           </div>
           <Badge
             variant={member.role === "owner" ? "default" : "secondary"}
-            className="shrink-0"
+            className="h-7 shrink-0 rounded-full border border-foreground/10 bg-muted/60 px-3 text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
           >
             {member.role === "owner" ? <Crown className="size-3" /> : null}
             {member.role}

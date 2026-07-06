@@ -121,20 +121,40 @@ function sanitizePhotobookClone(documentClone: Document) {
 
   for (const page of pages) {
     const isCreditPage = page.dataset.photobookPageKind === "credit";
-    const pageBackground = isCreditPage
-      ? isDarkTheme
-        ? "#050505"
-        : "#ffffff"
-      : "#050505";
-    const pageColor = isCreditPage ? (isDarkTheme ? "#f7efe0" : "#050505") : "#ffffff";
+    const pageStyles = view.getComputedStyle(page);
+    const computedBackground = pageStyles.backgroundColor;
+    const computedColor = pageStyles.color;
+    const pageBackground =
+      isCreditPage && !computedBackground
+        ? isDarkTheme
+          ? "#050505"
+          : "#ffffff"
+        : !computedBackground ||
+            computedBackground === "rgba(0, 0, 0, 0)" ||
+            hasUnsupportedColorFunction(computedBackground)
+          ? "#050505"
+          : computedBackground;
+    const pageColor =
+      isCreditPage && !computedColor
+        ? isDarkTheme
+          ? "#f7efe0"
+          : "#050505"
+        : !computedColor || hasUnsupportedColorFunction(computedColor)
+          ? "#ffffff"
+          : computedColor;
     const pageBorderColor = isCreditPage
       ? isDarkTheme
         ? "rgba(255, 255, 255, 0.14)"
         : "rgba(0, 0, 0, 0.10)"
-      : "rgba(255, 255, 255, 0.16)";
+      : "transparent";
 
     page.classList.add("photobook-export-safe");
     applyExportSafeVariables(page);
+    page.style.position = "relative";
+    page.style.inset = "auto";
+    page.style.left = "0";
+    page.style.top = "0";
+    page.style.margin = "0";
     page.style.width = `${PDF_PAGE_WIDTH}px`;
     page.style.height = `${PDF_PAGE_HEIGHT}px`;
     page.style.minWidth = `${PDF_PAGE_WIDTH}px`;
@@ -144,7 +164,7 @@ function sanitizePhotobookClone(documentClone: Document) {
     page.style.backgroundColor = pageBackground;
     page.style.color = pageColor;
     page.style.borderColor = pageBorderColor;
-    page.style.boxShadow = "0 28px 90px rgba(0, 0, 0, 0.22)";
+    page.style.boxShadow = "none";
     page.style.opacity = "1";
     page.style.transform = "none";
     page.style.filter = "none";
@@ -156,7 +176,6 @@ function sanitizePhotobookClone(documentClone: Document) {
       const styles = view.getComputedStyle(element);
 
       element.style.opacity = "1";
-      element.style.transform = "none";
       element.style.filter = "none";
       element.style.backdropFilter = "none";
       element.style.mixBlendMode = "normal";
@@ -222,13 +241,13 @@ async function capturePhotobookPage(
   await nextAnimationFrame();
 
   const canvas = await html2canvas(pageElement, {
-    backgroundColor: "#050505",
+    backgroundColor: null,
     scale: 2,
     width: rect.width,
     height: rect.height,
     useCORS: true,
     allowTaint: false,
-    logging: true,
+    logging: false,
     onclone: sanitizePhotobookClone,
   });
 
@@ -246,9 +265,17 @@ async function capturePhotobookPage(
 }
 
 function getExportPages() {
-  const pages = Array.from(
-    document.querySelectorAll<HTMLElement>("[data-photobook-page='true']"),
-  )
+  const exportCopies = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[data-photobook-page='true'][data-photobook-export-copy='true']",
+    ),
+  );
+  const sourceElements =
+    exportCopies.length > 0
+      ? exportCopies
+      : Array.from(document.querySelectorAll<HTMLElement>("[data-photobook-page='true']"));
+
+  const pages = sourceElements
     .map((element, index) => {
       const rect = element.getBoundingClientRect();
       const fallbackLabel =
@@ -296,14 +323,15 @@ function getExportPages() {
       order,
     }),
   );
-  const customPages = exportPages.filter(
-    (page) => page.element.dataset.photobookPageKind === "custom",
-  );
-  const firstCustomPage = customPages[0]?.element;
-
-  logPdfExport("custom pages found", {
-    count: customPages.length,
-    firstCustomPagePhotoBlocks: firstCustomPage?.dataset.photobookPhotoBlocks ?? "[]",
+  logPdfExport("export pages resolved", {
+    source: exportCopies.length > 0 ? "fixed export copies" : "visible fallback",
+    count: exportPages.length,
+    order: exportPages.map((page) => ({
+      id: page.id,
+      label: page.label,
+      order: page.order,
+      kind: page.element.dataset.photobookPageKind,
+    })),
   });
 
   return exportPages;
@@ -324,6 +352,7 @@ export function DownloadPdfButton({
   async function handleDownload() {
     setStatus("loading");
     setError(null);
+    let isExporting = false;
 
     try {
       await onBeforeDownload?.();
@@ -334,6 +363,11 @@ export function DownloadPdfButton({
         import("jspdf"),
       ]);
 
+      await nextAnimationFrame();
+
+      document.body.classList.add("is-exporting-pdf");
+      isExporting = true;
+      await waitForFonts();
       await nextAnimationFrame();
 
       const pageElements = getExportPages();
@@ -351,24 +385,15 @@ export function DownloadPdfButton({
         compress: true,
       });
 
-      document.body.classList.add("is-exporting-pdf");
+      for (const [index, pageElement] of pageElements.entries()) {
+        const canvas = await capturePhotobookPage(pageElement, html2canvas);
+        const image = canvas.toDataURL("image/jpeg", 0.92);
 
-      try {
-        await waitForFonts();
-        await nextAnimationFrame();
-
-        for (const [index, pageElement] of pageElements.entries()) {
-          const canvas = await capturePhotobookPage(pageElement, html2canvas);
-          const image = canvas.toDataURL("image/jpeg", 0.92);
-
-          if (index > 0) {
-            pdf.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT], "portrait");
-          }
-
-          pdf.addImage(image, "JPEG", 0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+        if (index > 0) {
+          pdf.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT], "portrait");
         }
-      } finally {
-        document.body.classList.remove("is-exporting-pdf");
+
+        pdf.addImage(image, "JPEG", 0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
       }
 
       pdf.save(`clay-${slugify(roomName)}-photobook.pdf`);
@@ -380,6 +405,10 @@ export function DownloadPdfButton({
           ? downloadError.message
           : "PDF generation failed.",
       );
+    } finally {
+      if (isExporting) {
+        document.body.classList.remove("is-exporting-pdf");
+      }
     }
   }
 

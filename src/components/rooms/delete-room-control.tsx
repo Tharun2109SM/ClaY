@@ -35,14 +35,17 @@ export function DeleteRoomControl({
   }
 
   return (
-    <div className="grid gap-4 rounded-3xl border bg-card p-5">
+    <div className="grid gap-4 rounded-[1.75rem] border border-white/10 bg-card/76 p-5 shadow-[0_18px_70px_rgb(0_0_0_/_0.14)] backdrop-blur dark:bg-white/[0.045]">
       <div>
-        <p className="text-sm text-foreground">Room settings</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+          Settings
+        </p>
+        <p className="mt-2 text-sm text-foreground">Room settings</p>
         <p className="mt-1 text-sm leading-6 text-muted-foreground">
           Manage permanent room actions.
         </p>
       </div>
-      <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-4">
+      <div className="rounded-2xl border border-destructive/15 bg-destructive/[0.035] p-4">
         <p className="text-sm text-destructive">Danger zone</p>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
           Permanently delete this room and its uploaded storage files.
@@ -50,7 +53,7 @@ export function DeleteRoomControl({
         <Button
           type="button"
           variant="destructive"
-          className="mt-4 rounded-full"
+          className="mt-4 rounded-full border border-destructive/20"
           onClick={() => {
             setOpen(true);
             setError(null);

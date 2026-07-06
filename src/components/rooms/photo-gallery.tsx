@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
   AlertCircle,
   ChevronLeft,
@@ -68,19 +68,26 @@ function getPossessiveName(name: string) {
   return name.endsWith("s") ? `${name}' photos` : `${name}'s photos`;
 }
 
+function getPhotoImageUrl(photo: PhotoAsset, variant: "full" | "thumbnail") {
+  return variant === "thumbnail"
+    ? photo.thumbnail_public_url ?? photo.public_url
+    : photo.public_url;
+}
+
 function PhotoImage({
   photo,
   priority = false,
   variant = "full",
+  fit = "cover",
+  hoverZoom = true,
 }: {
   photo: PhotoAsset;
   priority?: boolean;
   variant?: "full" | "thumbnail";
+  fit?: "cover" | "contain";
+  hoverZoom?: boolean;
 }) {
-  const imageUrl =
-    variant === "thumbnail"
-      ? photo.thumbnail_public_url ?? photo.public_url
-      : photo.public_url;
+  const imageUrl = getPhotoImageUrl(photo, variant);
 
   if (!imageUrl) {
     return (
@@ -98,8 +105,16 @@ function PhotoImage({
       src={imageUrl}
       alt={photo.caption || photo.original_file_name}
       fill
-      sizes="(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
-      className="object-cover"
+      sizes={
+        fit === "contain"
+          ? "(min-width: 1024px) 900px, 100vw"
+          : "(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
+      }
+      className={cn(
+        fit === "contain" ? "object-contain" : "object-cover",
+        hoverZoom &&
+          "transition duration-700 ease-out group-hover:scale-[1.035]",
+      )}
       priority={priority}
       crossOrigin="anonymous"
       unoptimized
@@ -126,7 +141,7 @@ export function PhotoGallery({
 }) {
   const router = useRouter();
   const [selection, setSelection] = useState<GallerySelection>({ type: "people" });
-  const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
+  const [activePhotoIndex, setActivePhotoIndex] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PhotoAsset | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeletePending, startDeleteTransition] = useTransition();
@@ -177,11 +192,39 @@ export function PhotoGallery({
       : selectedMember
         ? getPossessiveName(getMemberName(selectedMember))
         : "Photos";
+  const selectedMemberName = selectedMember ? getMemberName(selectedMember) : null;
+  const selectedMemberInitials = selectedMemberName
+    ? selectedMemberName.slice(0, 2).toUpperCase()
+    : "CL";
 
-  const activeIndex = activePhotoId
-    ? filteredPhotos.findIndex((photo) => photo.id === activePhotoId)
-    : -1;
-  const activePhoto = activeIndex >= 0 ? filteredPhotos[activeIndex] : null;
+  const activePhoto =
+    activePhotoIndex !== null ? filteredPhotos[activePhotoIndex] ?? null : null;
+
+  const closeLightbox = useCallback(() => {
+    setActivePhotoIndex(null);
+  }, []);
+
+  const showNextPhoto = useCallback(() => {
+    setActivePhotoIndex((current) => {
+      if (filteredPhotos.length === 0) {
+        return null;
+      }
+
+      return current === null ? 0 : (current + 1) % filteredPhotos.length;
+    });
+  }, [filteredPhotos.length]);
+
+  const showPreviousPhoto = useCallback(() => {
+    setActivePhotoIndex((current) => {
+      if (filteredPhotos.length === 0) {
+        return null;
+      }
+
+      return current === null
+        ? filteredPhotos.length - 1
+        : (current - 1 + filteredPhotos.length) % filteredPhotos.length;
+    });
+  }, [filteredPhotos.length]);
 
   function canDeletePhoto(photo: PhotoAsset) {
     return isHost || photo.uploader_id === currentUserId;
@@ -203,8 +246,8 @@ export function PhotoGallery({
       const result = await deletePhotoAction(formData);
 
       if (result.ok) {
-        if (activePhotoId === target.id) {
-          setActivePhotoId(null);
+        if (activePhoto?.id === target.id) {
+          closeLightbox();
         }
 
         setDeleteTarget(null);
@@ -217,37 +260,162 @@ export function PhotoGallery({
   }
 
   useEffect(() => {
+    if (activePhotoIndex === null || filteredPhotos.length <= 1) {
+      return;
+    }
+
+    const adjacentPhotos = [
+      filteredPhotos[(activePhotoIndex + 1) % filteredPhotos.length],
+      filteredPhotos[
+        (activePhotoIndex - 1 + filteredPhotos.length) % filteredPhotos.length
+      ],
+    ];
+
+    adjacentPhotos.forEach((photo) => {
+      const src = photo ? getPhotoImageUrl(photo, "full") : null;
+
+      if (!src) {
+        return;
+      }
+
+      const image = new window.Image();
+      image.src = src;
+    });
+  }, [activePhotoIndex, filteredPhotos]);
+
+  useEffect(() => {
     if (!activePhoto) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setActivePhotoId(null);
+        closeLightbox();
       }
 
       if (event.key === "ArrowRight") {
-        setActivePhotoId(
-          filteredPhotos[(activeIndex + 1) % filteredPhotos.length]?.id ?? null,
-        );
+        showNextPhoto();
       }
 
       if (event.key === "ArrowLeft") {
-        setActivePhotoId(
-          filteredPhotos[
-            (activeIndex - 1 + filteredPhotos.length) % filteredPhotos.length
-          ]?.id ?? null,
-        );
+        showPreviousPhoto();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeIndex, activePhoto, filteredPhotos]);
+  }, [activePhoto, closeLightbox, showNextPhoto, showPreviousPhoto]);
+
+  const photoGridContent =
+    filteredPhotos.length === 0 ? (
+      <Card className="rounded-[1.5rem] border-dashed border-foreground/14 bg-background/38">
+        <CardContent className="flex min-h-44 flex-col items-center justify-center gap-2 text-center">
+          <ImageIcon className="size-6 text-muted-foreground" />
+          <p className="text-sm font-medium">No photos from this member yet</p>
+          <p className="text-sm text-muted-foreground">
+            Switch back to all photos or invite them to add a few.
+          </p>
+        </CardContent>
+      </Card>
+    ) : (
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(220px,100%),1fr))] gap-4">
+        {filteredPhotos.map((photo, index) => (
+          <Card
+            key={photo.id}
+            className="group overflow-hidden rounded-[1.5rem] border-white/10 bg-background/44 py-0 shadow-sm transition duration-300 hover:-translate-y-1 hover:border-foreground/22 hover:shadow-[0_18px_60px_rgb(0_0_0_/_0.18)] dark:bg-black/22"
+          >
+            <div className="relative aspect-[4/5] w-full overflow-hidden bg-muted">
+              <button
+                type="button"
+                className="absolute inset-0 w-full text-left"
+                onClick={() => setActivePhotoIndex(index)}
+              >
+                <PhotoImage photo={photo} variant="thumbnail" />
+                <span className="sr-only">Open photo</span>
+              </button>
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/32 via-transparent to-transparent opacity-0 transition duration-300 group-hover:opacity-100" />
+              {coverPhotoId === photo.id ? (
+                <Badge className="absolute left-3 top-3 gap-1 rounded-full border border-white/15 bg-black/45 text-white/88 backdrop-blur">
+                  <Star className="size-3" />
+                  Cover
+                </Badge>
+              ) : null}
+              {canDeletePhoto(photo) ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  aria-label="Delete photo"
+                  className="absolute right-3 top-3 z-10 size-9 rounded-full border border-black/10 bg-white/85 text-muted-foreground shadow-sm backdrop-blur transition duration-200 hover:border-destructive/30 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 dark:border-white/10 dark:bg-black/60 dark:hover:border-destructive/40 dark:hover:bg-destructive dark:hover:text-destructive-foreground"
+                  onClick={() => {
+                    setDeleteTarget(photo);
+                    setDeleteError(null);
+                  }}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              ) : null}
+            </div>
+            <CardContent className="grid gap-3 p-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">
+                  {photo.caption || photo.original_file_name}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  Uploaded by {getUploaderName(photo)}
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {formatPhotoDate(photo.created_at)} · {formatBytes(photo.file_size)}
+                {photo.width && photo.height
+                  ? ` · ${photo.width} x ${photo.height}`
+                  : ""}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <form action={togglePhotoFavoriteAction}>
+                  <input type="hidden" name="room_id" value={roomId} />
+                  <input type="hidden" name="photo_id" value={photo.id} />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    variant={photo.is_favorited ? "default" : "outline"}
+                    className="rounded-full"
+                  >
+                    <Heart
+                      className={cn(
+                        "size-4",
+                        photo.is_favorited ? "fill-current" : "",
+                      )}
+                    />
+                    {photo.favorite_count}
+                  </Button>
+                </form>
+                {isHost ? (
+                  <form action={setRoomCoverAction}>
+                    <input type="hidden" name="room_id" value={roomId} />
+                    <input type="hidden" name="photo_id" value={photo.id} />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant={coverPhotoId === photo.id ? "secondary" : "outline"}
+                      disabled={coverPhotoId === photo.id}
+                      className="rounded-full"
+                    >
+                      <Star className="size-4" />
+                      {coverPhotoId === photo.id ? "Cover" : "Set cover"}
+                    </Button>
+                  </form>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
 
   if (error) {
     return (
-      <Card className="border-destructive/20 bg-destructive/5">
+      <Card className="rounded-[1.75rem] border-destructive/20 bg-destructive/5">
         <CardContent className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
           <AlertCircle className="size-6 text-destructive" />
           <div>
@@ -264,54 +432,55 @@ export function PhotoGallery({
   }
 
   return (
-    <section className="grid gap-4">
+    <section className="grid gap-5 rounded-[2rem] border border-white/10 bg-card/52 p-5 shadow-[0_18px_70px_rgb(0_0_0_/_0.12)] backdrop-blur sm:p-6 dark:bg-white/[0.025]">
       {selection.type === "people" ? (
         <>
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
                 Perspectives
               </p>
-              <h2 className="mt-2 text-2xl font-semibold">Perspectives</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <h2 className="mt-2 text-3xl leading-tight">Perspectives</h2>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
                 Open each person&apos;s collection to see the room through their lens.
               </p>
             </div>
             <Button
               type="button"
               variant="outline"
+              className="h-10 rounded-full border-foreground/12 bg-background/45 px-4 transition duration-300 hover:-translate-y-0.5 hover:border-foreground/24 dark:bg-white/[0.045]"
               disabled={photos.length === 0}
               onClick={() => {
                 setSelection({ type: "all" });
-                setActivePhotoId(null);
+                closeLightbox();
               }}
             >
               All photos
             </Button>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2 xl:gap-5">
             {memberSummaries.map((member) => (
               <Card
                 key={member.id}
-                className="overflow-hidden py-0 transition hover:border-foreground/20"
+                className="group overflow-hidden rounded-[1.5rem] border-white/10 bg-background/44 py-0 shadow-sm transition duration-300 hover:-translate-y-1 hover:border-foreground/22 hover:shadow-[0_18px_60px_rgb(0_0_0_/_0.18)] dark:bg-black/22"
               >
                 <button
                   type="button"
                   className="grid w-full text-left"
                   onClick={() => {
                     setSelection({ type: "member", memberId: member.user_id });
-                    setActivePhotoId(null);
+                    closeLightbox();
                   }}
                 >
-                  <div className="relative aspect-[16/10] bg-muted">
+                  <div className="relative aspect-[16/10] overflow-hidden bg-muted">
                     {member.resolvedLatestThumbnailUrl ? (
                       <Image
                         src={member.resolvedLatestThumbnailUrl}
                         alt={`${getMemberName(member)} latest upload`}
                         fill
                         sizes="(min-width: 1024px) 360px, 100vw"
-                        className="object-cover"
+                        className="object-cover transition duration-700 ease-out group-hover:scale-[1.045]"
                         crossOrigin="anonymous"
                         unoptimized
                       />
@@ -320,22 +489,25 @@ export function PhotoGallery({
                         <ImageIcon className="size-8" />
                       </div>
                     )}
+                    <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/55 to-transparent opacity-80" />
                     {member.role === "owner" ? (
-                      <Badge className="absolute left-3 top-3">Host</Badge>
+                      <Badge className="absolute left-3 top-3 rounded-full border border-white/15 bg-black/40 text-white/86 backdrop-blur">
+                        Host
+                      </Badge>
                     ) : null}
                   </div>
-                  <CardContent className="flex items-center justify-between gap-4 p-4">
+                  <CardContent className="flex items-center justify-between gap-4 p-[1.125rem]">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">
+                      <p className="truncate text-base">
                         {getMemberName(member)}
                       </p>
                       {member.email ? (
-                        <p className="truncate text-xs text-muted-foreground">
+                        <p className="mt-1 truncate text-xs text-muted-foreground">
                           {member.email}
                         </p>
                       ) : null}
                     </div>
-                    <div className="shrink-0 rounded-full border px-3 py-1 text-xs text-muted-foreground">
+                    <div className="shrink-0 rounded-full border border-foreground/10 bg-muted/45 px-3 py-1 text-xs text-muted-foreground">
                       {member.resolvedPhotoCount} photo
                       {member.resolvedPhotoCount === 1 ? "" : "s"}
                     </div>
@@ -347,23 +519,23 @@ export function PhotoGallery({
         </>
       ) : (
         <>
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="-ml-3 mb-2"
+                className="-ml-3 mb-2 rounded-full"
                 onClick={() => {
                   setSelection({ type: "people" });
-                  setActivePhotoId(null);
+                  closeLightbox();
                 }}
               >
                 <ChevronLeft className="size-4" />
                 Back to people
               </Button>
-              <h2 className="text-2xl font-semibold">{photoViewTitle}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <h2 className="text-3xl leading-tight">{photoViewTitle}</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
                 {filteredPhotos.length} photo
                 {filteredPhotos.length === 1 ? "" : "s"} in this view
               </p>
@@ -372,10 +544,11 @@ export function PhotoGallery({
               <Button
                 type="button"
                 variant="outline"
+                className="h-10 rounded-full border-foreground/12 bg-background/45 px-4 transition duration-300 hover:-translate-y-0.5 hover:border-foreground/24 dark:bg-white/[0.045]"
                 disabled={photos.length === 0}
                 onClick={() => {
                   setSelection({ type: "all" });
-                  setActivePhotoId(null);
+                  closeLightbox();
                 }}
               >
                 All photos
@@ -383,108 +556,64 @@ export function PhotoGallery({
             ) : null}
           </div>
 
-      {filteredPhotos.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex min-h-44 flex-col items-center justify-center gap-2 text-center">
-            <ImageIcon className="size-6 text-muted-foreground" />
-            <p className="text-sm font-medium">No photos from this member yet</p>
-            <p className="text-sm text-muted-foreground">
-              Switch back to all photos or invite them to add a few.
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filteredPhotos.map((photo) => (
-            <Card key={photo.id} className="overflow-hidden py-0">
-              <div className="group relative aspect-[4/5] w-full bg-muted">
-                <button
-                  type="button"
-                  className="absolute inset-0 w-full text-left"
-                  onClick={() => setActivePhotoId(photo.id)}
-                >
-                  <PhotoImage photo={photo} variant="thumbnail" />
-                  <span className="sr-only">Open photo</span>
-                </button>
-                {coverPhotoId === photo.id ? (
-                  <Badge className="absolute left-3 top-3 gap-1">
-                    <Star className="size-3" />
-                    Cover
-                  </Badge>
-                ) : null}
-                {canDeletePhoto(photo) ? (
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="secondary"
-                    aria-label="Delete photo"
-                    className="absolute right-3 top-3 z-10 size-9 rounded-full border border-black/10 bg-white/85 text-muted-foreground shadow-sm backdrop-blur transition duration-200 hover:border-destructive/30 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 dark:border-white/10 dark:bg-black/60 dark:hover:border-destructive/40 dark:hover:bg-destructive dark:hover:text-destructive-foreground"
-                    onClick={() => {
-                      setDeleteTarget(photo);
-                      setDeleteError(null);
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                ) : null}
-              </div>
-              <CardContent className="grid gap-3 p-4">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {photo.caption || photo.original_file_name}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    Uploaded by {getUploaderName(photo)}
-                  </p>
+          {selection.type === "member" && selectedMember ? (
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="min-w-0">{photoGridContent}</div>
+              <aside className="grid gap-4 rounded-[1.5rem] border border-white/10 bg-background/50 p-5 shadow-sm dark:bg-black/22">
+                <div className="flex items-start gap-3">
+                  <div className="grid size-12 shrink-0 place-items-center rounded-full border border-foreground/10 bg-[#f7efe0] text-sm text-black shadow-sm dark:bg-white/10 dark:text-foreground">
+                    {selectedMemberInitials}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      Viewing perspective
+                    </p>
+                    <h3 className="mt-2 truncate text-lg">{selectedMemberName}</h3>
+                    {selectedMember.email ? (
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {selectedMember.email}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  {formatPhotoDate(photo.created_at)} ·{" "}
-                  {formatBytes(photo.file_size)}
-                  {photo.width && photo.height
-                    ? ` · ${photo.width} x ${photo.height}`
-                    : ""}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl border border-foreground/10 bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">Photos</p>
+                    <p className="mt-1 text-2xl leading-none">
+                      {filteredPhotos.length}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-foreground/10 bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">Role</p>
+                    <p className="mt-1 truncate text-sm capitalize">
+                      {selectedMember.role}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-sm leading-6 text-muted-foreground">
+                  You&apos;re seeing the room through this person&apos;s uploaded
+                  moments.
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <form action={togglePhotoFavoriteAction}>
-                    <input type="hidden" name="room_id" value={roomId} />
-                    <input type="hidden" name="photo_id" value={photo.id} />
-                    <Button
-                      type="submit"
-                      size="sm"
-                      variant={photo.is_favorited ? "default" : "outline"}
-                    >
-                      <Heart
-                        className={cn(
-                          "size-4",
-                          photo.is_favorited ? "fill-current" : "",
-                        )}
-                      />
-                      {photo.favorite_count}
-                    </Button>
-                  </form>
-                  {isHost ? (
-                    <form action={setRoomCoverAction}>
-                      <input type="hidden" name="room_id" value={roomId} />
-                      <input type="hidden" name="photo_id" value={photo.id} />
-                      <Button
-                        type="submit"
-                        size="sm"
-                        variant={
-                          coverPhotoId === photo.id ? "secondary" : "outline"
-                        }
-                        disabled={coverPhotoId === photo.id}
-                      >
-                        <Star className="size-4" />
-                        {coverPhotoId === photo.id ? "Cover" : "Set cover"}
-                      </Button>
-                    </form>
-                  ) : null}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 rounded-full border-foreground/12 bg-background/45 px-4 transition duration-300 hover:-translate-y-0.5 hover:border-foreground/24 dark:bg-white/[0.045]"
+                  disabled={photos.length === 0}
+                  onClick={() => {
+                    setSelection({ type: "all" });
+                    closeLightbox();
+                  }}
+                >
+                  All photos
+                </Button>
+              </aside>
+            </div>
+          ) : (
+            photoGridContent
+          )}
         </>
       )}
 
@@ -544,47 +673,56 @@ export function PhotoGallery({
 
       {activePhoto ? (
         <div
-          className="fixed inset-0 z-50 grid bg-foreground/80 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/82 p-3 backdrop-blur-md sm:p-6"
           role="dialog"
           aria-modal="true"
           aria-label="Photo viewer"
         >
-          <div className="relative m-auto grid max-h-[calc(100vh-2rem)] w-full max-w-6xl overflow-hidden rounded-lg border bg-card shadow-2xl lg:grid-cols-[1fr_320px]">
-            <div className="relative min-h-[55vh] bg-black lg:min-h-[80vh]">
-              <PhotoImage photo={activePhoto} priority />
+          <div className="relative grid h-[min(90vh,900px)] w-[min(1240px,calc(100vw-1.5rem))] grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-[1.5rem] border border-white/12 bg-card shadow-2xl lg:w-[min(1240px,calc(100vw-3rem))] lg:grid-cols-[minmax(0,1fr)_300px] lg:grid-rows-none">
+            <div className="relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black">
+              <PhotoImage
+                photo={activePhoto}
+                priority
+                fit="contain"
+                hoverZoom={false}
+              />
               <Button
                 type="button"
                 size="icon"
                 variant="secondary"
-                className="absolute left-4 top-1/2 -translate-y-1/2"
-                onClick={() =>
-                  setActivePhotoId(
-                    filteredPhotos[
-                      (activeIndex - 1 + filteredPhotos.length) %
-                        filteredPhotos.length
-                    ]?.id ?? null,
-                  )
-                }
+                aria-label="Close photo viewer"
+                className="absolute right-3 top-3 z-20 rounded-full border border-white/10 bg-black/50 text-white shadow-lg backdrop-blur transition hover:bg-black/70 lg:hidden"
+                onClick={closeLightbox}
               >
-                <ChevronLeft className="size-4" />
+                <X className="size-4" />
               </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="secondary"
-                className="absolute right-4 top-1/2 -translate-y-1/2"
-                onClick={() =>
-                  setActivePhotoId(
-                    filteredPhotos[(activeIndex + 1) % filteredPhotos.length]
-                      ?.id ?? null,
-                  )
-                }
-              >
-                <ChevronRight className="size-4" />
-              </Button>
+              {filteredPhotos.length > 1 ? (
+                <>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="secondary"
+                    aria-label="Previous photo"
+                    className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/10 bg-black/45 text-white shadow-lg backdrop-blur transition hover:bg-black/70 sm:left-4"
+                    onClick={showPreviousPhoto}
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="secondary"
+                    aria-label="Next photo"
+                    className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/10 bg-black/45 text-white shadow-lg backdrop-blur transition hover:bg-black/70 sm:right-4"
+                    onClick={showNextPhoto}
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </>
+              ) : null}
             </div>
 
-            <aside className="grid content-between gap-6 p-5">
+            <aside className="grid min-h-0 content-between gap-5 overflow-y-auto border-t border-white/10 bg-card/96 p-5 lg:border-l lg:border-t-0">
               <div className="grid gap-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -599,7 +737,8 @@ export function PhotoGallery({
                     type="button"
                     size="icon"
                     variant="ghost"
-                    onClick={() => setActivePhotoId(null)}
+                    className="hidden rounded-full lg:inline-flex"
+                    onClick={closeLightbox}
                   >
                     <X className="size-4" />
                   </Button>
@@ -633,7 +772,7 @@ export function PhotoGallery({
 
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>
-                  {activeIndex + 1} of {filteredPhotos.length}
+                  {(activePhotoIndex ?? 0) + 1} of {filteredPhotos.length}
                 </span>
                 <span>Esc to close</span>
               </div>

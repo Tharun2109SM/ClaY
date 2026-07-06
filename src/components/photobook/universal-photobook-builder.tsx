@@ -6,12 +6,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   ArrowDown,
   ArrowUp,
   Copy,
+  GripVertical,
   ImagePlus,
   Layers,
   Palette,
@@ -125,6 +127,20 @@ type Selection =
       objectType: "page" | "text" | "photo";
       objectId?: string;
     };
+
+type ReorderPagePreview = {
+  id: string;
+  label: string;
+  typeLabel: string;
+  pageNumber: number;
+  locked: boolean;
+  backgroundColor: string;
+  textColor: string;
+  overlay: CoverOverlayStyle;
+  coverPhoto?: PhotoAsset;
+  textObjects: PhotobookTextObject[];
+  photoBlocks: PhotoBlock[];
+};
 
 const fontOptions: { value: CoverFont; label: string; className: string }[] = [
   { value: "editorial-serif", label: "Editorial Serif", className: "font-serif" },
@@ -304,6 +320,8 @@ const minTextScale = 0.35;
 const maxTextScale = 2.8;
 const minTextBoxWidth = 0.12;
 const maxTextBoxWidth = 0.98;
+const exportPageWidth = 1200;
+const exportPageHeight = 1500;
 
 const panelClass =
   "sticky top-24 grid max-h-[calc(100vh-7rem)] gap-5 overflow-y-auto rounded-[2rem] border border-border/45 bg-card/92 p-5 shadow-[0_22px_70px_rgb(0_0_0_/_0.055)] backdrop-blur-xl dark:border-white/[0.09] dark:bg-[#050505]/94 dark:shadow-[0_24px_80px_rgb(0_0_0_/_0.36)]";
@@ -648,6 +666,45 @@ function arrangeBlocks(blocks: PhotoBlock[], layout: PageLayout) {
       zIndex: index + 1,
     }),
   }));
+}
+
+function orderCustomPagesByIds(pages: CustomPage[], pageIds: string[]) {
+  const pageMap = new Map(pages.map((page) => [page.id, page]));
+  const orderedPages = pageIds
+    .map((pageId) => pageMap.get(pageId))
+    .filter((page): page is CustomPage => Boolean(page));
+  const missingPages = pages.filter((page) => !pageIds.includes(page.id));
+
+  return [...orderedPages, ...missingPages];
+}
+
+function defaultCustomPageOrderIds(pages: CustomPage[]) {
+  return pages
+    .map((page, index) => ({ page, index }))
+    .sort((first, second) => {
+      if (first.page.type !== second.page.type) {
+        return first.page.type === "text" ? -1 : 1;
+      }
+
+      return first.index - second.index;
+    })
+    .map(({ page }) => page.id);
+}
+
+function movePageId(pageIds: string[], pageId: string, direction: "up" | "down") {
+  const fromIndex = pageIds.indexOf(pageId);
+
+  if (fromIndex === -1) return pageIds;
+
+  const toIndex = direction === "up" ? fromIndex - 1 : fromIndex + 1;
+
+  if (toIndex < 0 || toIndex >= pageIds.length) return pageIds;
+
+  const nextIds = [...pageIds];
+  const [movedPageId] = nextIds.splice(fromIndex, 1);
+  nextIds.splice(toIndex, 0, movedPageId);
+
+  return nextIds;
 }
 
 function resizeBlock(
@@ -1332,6 +1389,803 @@ function PhotoPicker({
   );
 }
 
+function getPreviewTextSize(textObject: PhotobookTextObject, cover = false) {
+  if (cover) {
+    if (textObject.role === "title") return 9.6;
+    if (textObject.role === "subtitle") return 4.1;
+    return 5.9;
+  }
+
+  if (textObject.role === "title") return 7.6;
+  if (textObject.role === "subtitle") return 3.9;
+  if (textObject.role === "name") return 3.9;
+  return 5;
+}
+
+function PagePreviewText({
+  textObject,
+  cover = false,
+}: {
+  textObject: PhotobookTextObject;
+  cover?: boolean;
+}) {
+  return (
+    <div
+      className="absolute overflow-hidden"
+      style={{
+        left: `${textObject.x * 100}%`,
+        top: `${textObject.y * 100}%`,
+        width: `${textObject.width * 100}%`,
+        transform: `translate(-50%, -50%) scale(${textObject.scale})`,
+        transformOrigin: "center",
+        color: textObject.color,
+        zIndex: textObject.role === "title" ? 20 : 21,
+        maxHeight: "100%",
+        contain: "paint",
+        isolation: "isolate",
+      }}
+    >
+      <span
+        className={cn(
+          "block w-full max-w-none whitespace-pre-wrap text-left leading-tight",
+          cover ? "drop-shadow-[0_1px_8px_rgb(0_0_0_/_0.42)]" : "",
+          getFontClass(textObject.font),
+        )}
+        style={{
+          fontSize: `calc(${getPreviewTextSize(textObject, cover)}cqw)`,
+          overflowWrap: "normal",
+          wordBreak: "normal",
+        }}
+      >
+        {textObject.text}
+      </span>
+    </div>
+  );
+}
+
+function PagePreviewPhotoBlock({
+  block,
+  photo,
+  variant = "card",
+}: {
+  block: PhotoBlock;
+  photo: PhotoAsset | undefined;
+  variant?: "card" | "detail";
+}) {
+  const photoUrl = photo
+    ? (getPhotoThumbnailUrl(photo) ?? getPhotoUrl(photo))
+    : null;
+
+  return (
+    <div
+      className="absolute overflow-hidden rounded-[0.45rem] bg-neutral-100 dark:bg-[#111111]"
+      style={{
+        left: `${block.x}%`,
+        top: `${block.y}%`,
+        width: `${block.width}%`,
+        height: `${block.height}%`,
+        transform: `rotate(${block.rotation}deg)`,
+        zIndex: block.zIndex,
+        contain: "paint",
+        isolation: "isolate",
+      }}
+    >
+      {photo && photoUrl ? (
+        <Image
+          src={photoUrl}
+          alt={photo.original_file_name}
+          fill
+          sizes={variant === "detail" ? "360px" : "180px"}
+          className="pointer-events-none"
+          style={{ objectFit: block.objectFit }}
+          crossOrigin="anonymous"
+          draggable={false}
+          unoptimized
+        />
+      ) : (
+        <div className="grid size-full place-items-center text-black/25 dark:text-white/25">
+          <ImagePlus className={variant === "detail" ? "size-5" : "size-3"} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PageThumbnailPreview({
+  page,
+  photosById,
+  variant = "card",
+}: {
+  page: ReorderPagePreview;
+  photosById: Map<string, PhotoAsset>;
+  variant?: "card" | "detail";
+}) {
+  const coverUrl = page.coverPhoto
+    ? (getPhotoThumbnailUrl(page.coverPhoto) ?? getPhotoUrl(page.coverPhoto))
+    : null;
+  const isCover = page.typeLabel === "Cover";
+
+  return (
+    <div
+      className={cn(
+        "relative aspect-[3/4] w-full overflow-hidden rounded-[1rem] border shadow-[0_14px_40px_rgb(0_0_0_/_0.18)]",
+        isDarkColor(page.backgroundColor) ? "border-white/[0.12]" : "border-black/[0.12]",
+        variant === "detail" ? "rounded-[1.35rem]" : "",
+      )}
+      style={{
+        backgroundColor: page.backgroundColor,
+        color: page.textColor,
+        clipPath: variant === "detail" ? "inset(0 round 1.35rem)" : "inset(0 round 1rem)",
+        contain: "paint",
+        containerType: "size",
+        isolation: "isolate",
+        overflow: "hidden",
+      }}
+    >
+      {isCover && coverUrl ? (
+        <Image
+          src={coverUrl}
+          alt={page.coverPhoto?.original_file_name ?? "Cover photo"}
+          fill
+          sizes={variant === "detail" ? "420px" : "180px"}
+          className="object-cover"
+          crossOrigin="anonymous"
+          unoptimized
+        />
+      ) : null}
+      {page.overlay !== "none" ? (
+        <div
+          aria-hidden="true"
+          className={cn(
+            "absolute inset-0",
+            getOverlayClass(page.overlay, isCover),
+          )}
+        />
+      ) : null}
+      {page.photoBlocks.map((block) => (
+        <PagePreviewPhotoBlock
+          key={block.id}
+          block={block}
+          photo={photosById.get(block.photoId)}
+          variant={variant}
+        />
+      ))}
+      {page.textObjects.map((textObject) => (
+        <PagePreviewText
+          key={textObject.id}
+          textObject={textObject}
+          cover={isCover}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ReorderPageCard({
+  page,
+  selected,
+  dragging,
+  movableCount,
+  movableIndex,
+  photosById,
+  onSelect,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  onMoveUp,
+  onMoveDown,
+}: {
+  page: ReorderPagePreview;
+  selected: boolean;
+  dragging: boolean;
+  movableCount: number;
+  movableIndex: number;
+  photosById: Map<string, PhotoAsset>;
+  onSelect: () => void;
+  onDragStart?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
+  onDragOver?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLDivElement>) => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+}) {
+  return (
+    <div
+      draggable={!page.locked}
+      onClick={onSelect}
+      onDragStart={page.locked ? undefined : onDragStart}
+      onDragEnd={page.locked ? undefined : onDragEnd}
+      onDragOver={page.locked ? undefined : onDragOver}
+      onDrop={page.locked ? undefined : onDrop}
+      className={cn(
+        "group isolate grid cursor-pointer gap-3 overflow-hidden rounded-[1.45rem] border bg-white p-3 text-left shadow-[0_18px_44px_rgb(0_0_0_/_0.10)] transition duration-200 [contain:paint] hover:-translate-y-0.5 hover:border-black/25 hover:bg-neutral-50 dark:bg-[#050505] dark:shadow-[0_18px_44px_rgb(0_0_0_/_0.28)] dark:hover:border-white/25 dark:hover:bg-[#080808]",
+        selected
+          ? "border-black/45 ring-2 ring-black/10 dark:border-white/45 dark:ring-white/10"
+          : "border-black/[0.10] dark:border-white/[0.10]",
+        dragging ? "scale-[0.98] opacity-50" : "",
+        !page.locked ? "cursor-grab active:cursor-grabbing" : "",
+      )}
+    >
+      <PageThumbnailPreview page={page} photosById={photosById} />
+      <div className="flex items-start gap-2">
+        {!page.locked ? (
+          <GripVertical className="mt-0.5 size-4 shrink-0 text-black/45 dark:text-white/45" />
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-black dark:text-white">{page.typeLabel}</p>
+          <p className="text-xs text-black/50 dark:text-white/50">Page {page.pageNumber}</p>
+        </div>
+        {page.locked ? (
+          <span className="rounded-full border border-black/10 bg-neutral-50 px-2 py-1 text-[0.58rem] uppercase tracking-[0.16em] text-black/55 dark:border-white/10 dark:bg-[#080808] dark:text-white/55">
+            Locked
+          </span>
+        ) : (
+          <div className="flex gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-8 rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+              onClick={(event) => {
+                event.stopPropagation();
+                onMoveUp?.();
+              }}
+              disabled={movableIndex === 0}
+              aria-label={`Move ${page.typeLabel} page up`}
+            >
+              <ArrowUp className="size-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-8 rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+              onClick={(event) => {
+                event.stopPropagation();
+                onMoveDown?.();
+              }}
+              disabled={movableIndex === movableCount - 1}
+              aria-label={`Move ${page.typeLabel} page down`}
+            >
+              <ArrowDown className="size-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function getExportTextSize(textObject: PhotobookTextObject, cover = false) {
+  if (cover) {
+    if (textObject.role === "title") return 104;
+    if (textObject.role === "subtitle") return 44;
+    return 64;
+  }
+
+  if (textObject.role === "title") return 82;
+  if (textObject.role === "subtitle") return 42;
+  if (textObject.role === "name") return 42;
+  return 54;
+}
+
+function ExportTextObject({
+  textObject,
+  cover = false,
+}: {
+  textObject: PhotobookTextObject;
+  cover?: boolean;
+}) {
+  return (
+    <div
+      className="absolute"
+      style={{
+        left: `${textObject.x * 100}%`,
+        top: `${textObject.y * 100}%`,
+        width: `${textObject.width * 100}%`,
+        transform: `translate(-50%, -50%) scale(${textObject.scale})`,
+        transformOrigin: "center",
+        color: textObject.color,
+        zIndex: textObject.role === "title" ? 20 : 21,
+      }}
+    >
+      <span
+        className={cn(
+          "block w-full max-w-none whitespace-pre-wrap text-left leading-tight",
+          cover ? "drop-shadow-[0_3px_22px_rgb(0_0_0_/_0.35)]" : "",
+          getFontClass(textObject.font),
+        )}
+        style={{
+          fontSize: `${getExportTextSize(textObject, cover)}px`,
+          overflowWrap: "normal",
+          wordBreak: "normal",
+        }}
+      >
+        {textObject.text}
+      </span>
+    </div>
+  );
+}
+
+function ExportPhotoBlock({
+  block,
+  photo,
+}: {
+  block: PhotoBlock;
+  photo: PhotoAsset | undefined;
+}) {
+  const photoUrl = photo ? getPhotoUrl(photo) : null;
+
+  return (
+    <div
+      className="absolute overflow-hidden rounded-[32px] bg-neutral-900"
+      style={{
+        left: `${block.x}%`,
+        top: `${block.y}%`,
+        width: `${block.width}%`,
+        height: `${block.height}%`,
+        transform: `rotate(${block.rotation}deg)`,
+        zIndex: block.zIndex,
+      }}
+    >
+      {photo && photoUrl ? (
+        <Image
+          src={photoUrl}
+          alt={photo.original_file_name}
+          fill
+          sizes={`${exportPageWidth}px`}
+          className="pointer-events-none"
+          style={{ objectFit: block.objectFit }}
+          crossOrigin="anonymous"
+          draggable={false}
+          loading="eager"
+          unoptimized
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ExportPageShell({
+  pageId,
+  label,
+  order,
+  kind,
+  backgroundColor,
+  textColor,
+  overlay,
+  children,
+}: {
+  pageId: string;
+  label: string;
+  order: number;
+  kind: string;
+  backgroundColor: string;
+  textColor: string;
+  overlay: CoverOverlayStyle;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      aria-hidden="true"
+      data-photobook-page="true"
+      data-photobook-export-copy="true"
+      data-photobook-page-id={pageId}
+      data-photobook-page-label={label}
+      data-photobook-page-order={String(order)}
+      data-photobook-page-kind={kind}
+      className="pointer-events-none fixed left-[-20000px] top-0 overflow-hidden"
+      style={{
+        width: `${exportPageWidth}px`,
+        height: `${exportPageHeight}px`,
+        backgroundColor,
+        color: textColor,
+      }}
+    >
+      {overlay !== "none" ? (
+        <div aria-hidden="true" className={cn("absolute inset-0", getOverlayClass(overlay))} />
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+function CoverExportPage({
+  coverPhoto,
+  overlay,
+  textObjects,
+}: {
+  coverPhoto: PhotoAsset | undefined;
+  overlay: CoverOverlayStyle;
+  textObjects: PhotobookTextObject[];
+}) {
+  const coverUrl = coverPhoto ? getPhotoUrl(coverPhoto) : null;
+
+  return (
+    <ExportPageShell
+      pageId="cover"
+      label="cover page"
+      order={1}
+      kind="cover"
+      backgroundColor="#050505"
+      textColor="#ffffff"
+      overlay="none"
+    >
+      {coverUrl ? (
+        <Image
+          src={coverUrl}
+          alt={coverPhoto?.original_file_name ?? "Cover photo"}
+          fill
+          sizes={`${exportPageWidth}px`}
+          className="object-cover"
+          crossOrigin="anonymous"
+          loading="eager"
+          priority
+          unoptimized
+        />
+      ) : (
+        <div className="absolute inset-0 bg-[#050505]" />
+      )}
+      {overlay !== "none" ? (
+        <div
+          aria-hidden="true"
+          className={cn("absolute inset-0", getOverlayClass(overlay, true))}
+        />
+      ) : null}
+      {textObjects.map((textObject) => (
+        <ExportTextObject key={textObject.id} textObject={textObject} cover />
+      ))}
+    </ExportPageShell>
+  );
+}
+
+function PhotobookStateExportPages({
+  coverPhoto,
+  coverOverlay,
+  coverTextObjects,
+  peopleBackgroundColor,
+  peopleOverlay,
+  peopleTextObjects,
+  peoplePhotoBlocks,
+  customPages,
+  photosById,
+}: {
+  coverPhoto: PhotoAsset | undefined;
+  coverOverlay: CoverOverlayStyle;
+  coverTextObjects: PhotobookTextObject[];
+  peopleBackgroundColor: string;
+  peopleOverlay: CoverOverlayStyle;
+  peopleTextObjects: PhotobookTextObject[];
+  peoplePhotoBlocks: PhotoBlock[];
+  customPages: CustomPage[];
+  photosById: Map<string, PhotoAsset>;
+}) {
+  const peopleTextColor = isDarkColor(peopleBackgroundColor) ? "#ffffff" : "#050505";
+  let nextOrder = 3;
+
+  return (
+    <div aria-hidden="true" className="photobook-export-root">
+      <CoverExportPage
+        coverPhoto={coverPhoto}
+        overlay={coverOverlay}
+        textObjects={coverTextObjects}
+      />
+      <ExportPageShell
+        pageId="people"
+        label="people page"
+        order={2}
+        kind="people"
+        backgroundColor={peopleBackgroundColor}
+        textColor={peopleTextColor}
+        overlay={peopleOverlay}
+      >
+        {peoplePhotoBlocks.map((block) => (
+          <ExportPhotoBlock key={block.id} block={block} photo={photosById.get(block.photoId)} />
+        ))}
+        {peopleTextObjects.map((textObject) => (
+          <ExportTextObject key={textObject.id} textObject={textObject} />
+        ))}
+      </ExportPageShell>
+      {customPages.map((page) => {
+        const order = nextOrder++;
+
+        return (
+          <ExportPageShell
+            key={page.id}
+            pageId={page.id}
+            label={`${page.type === "text" ? "text" : "photo"} page ${order - 2}`}
+            order={order}
+            kind={page.type}
+            backgroundColor={page.backgroundColor}
+            textColor={page.textColor}
+            overlay={page.overlay}
+          >
+            {page.photoBlocks.map((block) => (
+              <ExportPhotoBlock
+                key={block.id}
+                block={block}
+                photo={photosById.get(block.photoId)}
+              />
+            ))}
+            {page.textObjects.map((textObject) => (
+              <ExportTextObject key={textObject.id} textObject={textObject} />
+            ))}
+          </ExportPageShell>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReorderPagesModal({
+  open,
+  coverPhoto,
+  coverOverlay,
+  coverTextObjects,
+  peopleBackgroundColor,
+  peopleOverlay,
+  peopleTextObjects,
+  peoplePhotoBlocks,
+  customPages,
+  draftOrderedPages,
+  draggedPageId,
+  selectedPageId,
+  photosById,
+  onSelectPage,
+  onCancel,
+  onReset,
+  onSave,
+  onMovePage,
+  onDragStart,
+  onDragEnd,
+  onDrop,
+}: {
+  open: boolean;
+  coverPhoto: PhotoAsset | undefined;
+  coverOverlay: CoverOverlayStyle;
+  coverTextObjects: PhotobookTextObject[];
+  peopleBackgroundColor: string;
+  peopleOverlay: CoverOverlayStyle;
+  peopleTextObjects: PhotobookTextObject[];
+  peoplePhotoBlocks: PhotoBlock[];
+  customPages: CustomPage[];
+  draftOrderedPages: CustomPage[];
+  draggedPageId: string | null;
+  selectedPageId: string;
+  photosById: Map<string, PhotoAsset>;
+  onSelectPage: (pageId: string) => void;
+  onCancel: () => void;
+  onReset: () => void;
+  onSave: () => void;
+  onMovePage: (pageId: string, direction: "up" | "down") => void;
+  onDragStart: (event: ReactDragEvent<HTMLDivElement>, pageId: string) => void;
+  onDragEnd: () => void;
+  onDrop: (event: ReactDragEvent<HTMLDivElement>, pageId: string) => void;
+}) {
+  if (!open) return null;
+
+  const lockedPages: ReorderPagePreview[] = [
+    {
+      id: "cover",
+      label: "Cover",
+      typeLabel: "Cover",
+      pageNumber: 1,
+      locked: true,
+      backgroundColor: "#050505",
+      textColor: "#ffffff",
+      overlay: coverOverlay,
+      coverPhoto,
+      textObjects: coverTextObjects,
+      photoBlocks: [],
+    },
+    {
+      id: "people",
+      label: "People",
+      typeLabel: "People",
+      pageNumber: 2,
+      locked: true,
+      backgroundColor: peopleBackgroundColor,
+      textColor: isDarkColor(peopleBackgroundColor) ? "#ffffff" : "#050505",
+      overlay: peopleOverlay,
+      textObjects: peopleTextObjects,
+      photoBlocks: peoplePhotoBlocks,
+    },
+  ];
+  const movablePages: ReorderPagePreview[] = draftOrderedPages.map((page, index) => ({
+    id: page.id,
+    label: page.type === "text" ? "Story page" : "Design page",
+    typeLabel: page.type === "text" ? "Text" : "Photo",
+    pageNumber: index + 3,
+    locked: false,
+    backgroundColor: page.backgroundColor,
+    textColor: page.textColor,
+    overlay: page.overlay,
+    textObjects: page.textObjects,
+    photoBlocks: page.photoBlocks,
+  }));
+  const allPages = [...lockedPages, ...movablePages];
+  const selectedPage = allPages.find((page) => page.id === selectedPageId) ?? allPages[0];
+  const selectedMovableIndex = movablePages.findIndex((page) => page.id === selectedPage.id);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid bg-white px-3 py-4 dark:bg-black sm:px-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reorder photobook pages"
+    >
+      <div className="mx-auto grid h-full w-full max-w-[1380px] overflow-hidden rounded-[2rem] border border-black/10 bg-white shadow-[0_36px_120px_rgb(0_0_0_/_0.22)] dark:border-white/10 dark:bg-black dark:shadow-[0_36px_120px_rgb(0_0_0_/_0.82)]">
+        <div className="flex flex-col gap-4 border-b border-black/10 bg-white px-5 py-5 dark:border-white/10 dark:bg-black sm:flex-row sm:items-start sm:justify-between sm:px-7">
+          <div>
+            <p className="text-[0.68rem] uppercase tracking-[0.24em] text-black/45 dark:text-white/45">
+              Photobook order
+            </p>
+            <h2 className="mt-2 text-2xl font-light text-black dark:text-white sm:text-3xl">
+              Reorder photobook
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-black/58 dark:text-white/55">
+              Drag pages into the order you want. Cover and People stay fixed.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="rounded-full bg-[#050505] text-white hover:bg-black dark:bg-[#f7efe0] dark:text-[#050505] dark:hover:bg-white"
+              onClick={onSave}
+            >
+              Save order
+            </Button>
+          </div>
+        </div>
+
+        <div className="isolate grid min-h-0 gap-5 overflow-y-auto bg-white p-5 dark:bg-black lg:grid-cols-[minmax(0,1fr)_330px] lg:overflow-hidden lg:p-7 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="min-h-0 overflow-y-auto rounded-[1.7rem] border border-black/10 bg-neutral-50 p-3 pr-3 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.9)] dark:border-white/10 dark:bg-[#050505] dark:shadow-none lg:p-4 lg:pr-4">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 xl:grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+              {lockedPages.map((page) => (
+                <ReorderPageCard
+                  key={page.id}
+                  page={page}
+                  selected={selectedPage.id === page.id}
+                  dragging={false}
+                  movableCount={movablePages.length}
+                  movableIndex={-1}
+                  photosById={photosById}
+                  onSelect={() => onSelectPage(page.id)}
+                />
+              ))}
+              {movablePages.map((page, index) => (
+                <ReorderPageCard
+                  key={page.id}
+                  page={page}
+                  selected={selectedPage.id === page.id}
+                  dragging={draggedPageId === page.id}
+                  movableCount={movablePages.length}
+                  movableIndex={index}
+                  photosById={photosById}
+                  onSelect={() => onSelectPage(page.id)}
+                  onDragStart={(event) => onDragStart(event, page.id)}
+                  onDragEnd={onDragEnd}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => onDrop(event, page.id)}
+                  onMoveUp={() => onMovePage(page.id, "up")}
+                  onMoveDown={() => onMovePage(page.id, "down")}
+                />
+              ))}
+            </div>
+            {customPages.length === 0 ? (
+              <div className="mt-5 rounded-[1.5rem] border border-dashed border-black/15 bg-white p-5 text-sm text-black/60 dark:border-white/15 dark:bg-[#080808] dark:text-white/60">
+                Add story or photo pages to reorder.
+              </div>
+            ) : customPages.length === 1 ? (
+              <div className="mt-5 rounded-[1.5rem] border border-black/10 bg-white p-5 text-sm text-black/60 dark:border-white/10 dark:bg-[#080808] dark:text-white/60">
+                Add more pages to rearrange your photobook.
+              </div>
+            ) : null}
+          </div>
+
+          <aside className="isolate grid gap-4 overflow-hidden rounded-[1.7rem] border border-black/10 bg-white p-4 shadow-[0_22px_70px_rgb(0_0_0_/_0.12),inset_0_1px_0_rgb(255_255_255_/_0.9)] dark:border-white/10 dark:bg-[#050505] dark:shadow-[0_22px_70px_rgb(0_0_0_/_0.44)] lg:sticky lg:top-0 lg:max-h-full lg:overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[0.64rem] uppercase tracking-[0.22em] text-black/40 dark:text-white/40">
+                  Selected
+                </p>
+                <h3 className="mt-1 text-xl font-light text-black dark:text-white">
+                  {selectedPage.label}
+                </h3>
+              </div>
+              <span className="rounded-full border border-black/10 bg-neutral-50 px-2.5 py-1 text-[0.62rem] uppercase tracking-[0.16em] text-black/55 dark:border-white/10 dark:bg-[#080808] dark:text-white/55">
+                Page {selectedPage.pageNumber}
+              </span>
+            </div>
+            <PageThumbnailPreview
+              page={selectedPage}
+              photosById={photosById}
+              variant="detail"
+            />
+            <div className="grid gap-2 text-sm leading-6 text-black/58 dark:text-white/55">
+              <p>
+                {selectedPage.locked
+                  ? "This page is fixed in the book."
+                  : "This page can move anywhere after the People page."}
+              </p>
+              <p className="text-xs uppercase tracking-[0.18em] text-black/35 dark:text-white/35">
+                {selectedPage.typeLabel} · {selectedPage.locked ? "Locked" : "Movable"}
+              </p>
+            </div>
+            {!selectedPage.locked ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+                  onClick={() => onMovePage(selectedPage.id, "up")}
+                  disabled={selectedMovableIndex <= 0}
+                >
+                  <ArrowUp className="size-4" />
+                  Move up
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+                  onClick={() => onMovePage(selectedPage.id, "down")}
+                  disabled={
+                    selectedMovableIndex === -1 ||
+                    selectedMovableIndex >= movablePages.length - 1
+                  }
+                >
+                  <ArrowDown className="size-4" />
+                  Move down
+                </Button>
+              </div>
+            ) : null}
+          </aside>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-black/10 bg-white px-5 py-4 dark:border-white/10 dark:bg-black sm:flex-row sm:items-center sm:justify-between sm:px-7">
+          <p className="text-xs leading-5 text-black/45 dark:text-white/45">
+            PDF download follows this saved order: Cover, People, then your reordered pages.
+          </p>
+          <div className="grid grid-cols-3 gap-2 sm:flex">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full border-black/10 bg-neutral-50 text-black hover:bg-neutral-100 dark:border-white/10 dark:bg-[#080808] dark:text-white dark:hover:bg-[#111111]"
+              onClick={onReset}
+            >
+              Reset order
+            </Button>
+            <Button
+              type="button"
+              className="rounded-full bg-[#050505] text-white hover:bg-black dark:bg-[#f7efe0] dark:text-[#050505] dark:hover:bg-white"
+              onClick={onSave}
+            >
+              Save order
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CreditPage() {
   return (
     <div
@@ -1433,6 +2287,10 @@ export function UniversalPhotobookBuilder({
   const [customSaveStatus, setCustomSaveStatus] = useState<"idle" | "saved" | "unsaved">(
     "idle",
   );
+  const [isReorderOpen, setIsReorderOpen] = useState(false);
+  const [draftPageOrder, setDraftPageOrder] = useState<string[]>([]);
+  const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
+  const [selectedReorderPageId, setSelectedReorderPageId] = useState("cover");
   const hasLoadedCoverRef = useRef(false);
   const hasLoadedPeopleRef = useRef(false);
   const hasLoadedCustomRef = useRef(false);
@@ -1465,6 +2323,7 @@ export function UniversalPhotobookBuilder({
     filter: coverOverlay,
   });
   const coverSettingsJson = JSON.stringify(coverSettings);
+  const draftOrderedPages = orderCustomPagesByIds(customPages, draftPageOrder);
 
   function persistCoverSettings() {
     logCoverDebug("[cover-save-client-state]", coverSettings);
@@ -1634,6 +2493,78 @@ export function UniversalPhotobookBuilder({
   function saveCustomPages() {
     window.localStorage.setItem(customPagesStorageKey, JSON.stringify(customPages));
     setCustomSaveStatus("saved");
+  }
+
+  function openReorderPanel() {
+    setDraftPageOrder(customPages.map((page) => page.id));
+    setDraggedPageId(null);
+    setSelectedReorderPageId("cover");
+    setIsReorderOpen(true);
+  }
+
+  function cancelReorder() {
+    setDraftPageOrder(customPages.map((page) => page.id));
+    setDraggedPageId(null);
+    setIsReorderOpen(false);
+  }
+
+  function resetReorder() {
+    setDraftPageOrder(defaultCustomPageOrderIds(customPages));
+    setDraggedPageId(null);
+  }
+
+  function savePageOrder() {
+    setCustomPages((current) => {
+      const orderedPages = orderCustomPagesByIds(current, draftPageOrder);
+
+      window.localStorage.setItem(customPagesStorageKey, JSON.stringify(orderedPages));
+      return orderedPages;
+    });
+    setCustomSaveStatus("saved");
+    setDraggedPageId(null);
+    setIsReorderOpen(false);
+  }
+
+  function moveDraftPage(pageId: string, direction: "up" | "down") {
+    setDraftPageOrder((current) => movePageId(current, pageId, direction));
+    setSelectedReorderPageId(pageId);
+  }
+
+  function handleReorderDragStart(
+    event: ReactDragEvent<HTMLDivElement>,
+    pageId: string,
+  ) {
+    setDraggedPageId(pageId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", pageId);
+  }
+
+  function handleReorderDrop(
+    event: ReactDragEvent<HTMLDivElement>,
+    targetPageId: string,
+  ) {
+    event.preventDefault();
+    const sourcePageId = draggedPageId ?? event.dataTransfer.getData("text/plain");
+
+    if (!sourcePageId || sourcePageId === targetPageId) {
+      setDraggedPageId(null);
+      return;
+    }
+
+    setDraftPageOrder((current) => {
+      const sourceIndex = current.indexOf(sourcePageId);
+      const targetIndex = current.indexOf(targetPageId);
+
+      if (sourceIndex === -1 || targetIndex === -1) return current;
+
+      const nextOrder = [...current];
+      const [movedPageId] = nextOrder.splice(sourceIndex, 1);
+      nextOrder.splice(targetIndex, 0, movedPageId);
+
+      return nextOrder;
+    });
+    setSelectedReorderPageId(sourcePageId);
+    setDraggedPageId(null);
   }
 
   function saveEditorState() {
@@ -1896,7 +2827,19 @@ export function UniversalPhotobookBuilder({
     const id = createClientId("custom-text-page");
     const page = createTextPage(customPages.length, id);
 
-    setCustomPages((current) => [...current, page]);
+    setCustomPages((current) => {
+      const firstPhotoPageIndex = current.findIndex((item) => item.type === "photo");
+
+      if (firstPhotoPageIndex === -1) {
+        return [...current, page];
+      }
+
+      return [
+        ...current.slice(0, firstPhotoPageIndex),
+        page,
+        ...current.slice(firstPhotoPageIndex),
+      ];
+    });
     setSelection({ pageId: id, pageType: "custom", objectType: "text", objectId: page.textObjects[0]?.id });
     markCustomUnsaved();
   }
@@ -2425,6 +3368,15 @@ export function UniversalPhotobookBuilder({
                 Photo page
               </Button>
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              className={cn(chipBase, chipIdle, "h-10 justify-center")}
+              onClick={openReorderPanel}
+            >
+              <GripVertical className="size-4" />
+              Reorder pages
+            </Button>
           </section>
 
           {selectedText ? (
@@ -2641,6 +3593,40 @@ export function UniversalPhotobookBuilder({
           )}
         </aside>
       </div>
+      <ReorderPagesModal
+        open={isReorderOpen}
+        coverPhoto={coverPhoto}
+        coverOverlay={coverOverlay}
+        coverTextObjects={coverTextObjects}
+        peopleBackgroundColor={peopleBackgroundColor}
+        peopleOverlay={peopleOverlay}
+        peopleTextObjects={peopleTextObjects}
+        peoplePhotoBlocks={peoplePhotoBlocks}
+        customPages={customPages}
+        draftOrderedPages={draftOrderedPages}
+        draggedPageId={draggedPageId}
+        selectedPageId={selectedReorderPageId}
+        photosById={photosById}
+        onSelectPage={setSelectedReorderPageId}
+        onCancel={cancelReorder}
+        onReset={resetReorder}
+        onSave={savePageOrder}
+        onMovePage={moveDraftPage}
+        onDragStart={handleReorderDragStart}
+        onDragEnd={() => setDraggedPageId(null)}
+        onDrop={handleReorderDrop}
+      />
+      <PhotobookStateExportPages
+        coverPhoto={coverPhoto}
+        coverOverlay={coverOverlay}
+        coverTextObjects={coverTextObjects}
+        peopleBackgroundColor={peopleBackgroundColor}
+        peopleOverlay={peopleOverlay}
+        peopleTextObjects={peopleTextObjects}
+        peoplePhotoBlocks={peoplePhotoBlocks}
+        customPages={customPages}
+        photosById={photosById}
+      />
       <CreditPage />
     </>
   );

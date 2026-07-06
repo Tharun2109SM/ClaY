@@ -152,9 +152,6 @@
     --border: rgba(255, 255, 255, 0.16);
     --input: rgba(255, 255, 255, 0.16);
     --ring: rgba(255, 255, 255, 0.32);
-    background-color: #050505;
-    border-color: rgba(255, 255, 255, 0.16);
-    color: #ffffff;
   }
 
   .photobook-export-safe * {
@@ -183,13 +180,16 @@
     --border: rgba(255, 255, 255, 0.16);
     --input: rgba(255, 255, 255, 0.16);
     --ring: rgba(255, 255, 255, 0.32);
-    background: #050505 !important;
-    border-color: rgba(255, 255, 255, 0.16) !important;
-    color: #ffffff !important;
     filter: none !important;
     mix-blend-mode: normal !important;
     opacity: 1 !important;
     transform: none !important;
+  }
+
+  body.is-exporting-pdf [data-photobook-export-copy="true"] {
+    left: 0 !important;
+    top: 0 !important;
+    z-index: -1 !important;
   }
 
   body.is-exporting-pdf [data-photobook-page="true"] * {
